@@ -189,27 +189,69 @@ public partial class BaseNode : StaticBody3D
 
 		UpdateHealthBar();
 
-		if (Health <= 0)
+		        if (Health <= 0)
 
-		{
+		        {
 
-			if (ExplosionScene != null)
+		            Destroy();
 
-			{
+		        }
 
-				var explosion = ExplosionScene.Instantiate<Node3D>();
+		    }
 
-				GetTree().Root.AddChild(explosion);
+		
 
-				explosion.GlobalPosition = this.GlobalPosition;
+		    public async void Destroy()
 
-			}
+		    {
 
-			QueueFree();
+		                // Instantiate explosion immediately
 
-		}
+		                if (ExplosionScene != null)
 
-	}
+		                {
+
+		                    var explosion = ExplosionScene.Instantiate<Node3D>();
+
+		                    GetTree().Root.AddChild(explosion);
+
+		                    explosion.GlobalPosition = this.GlobalPosition;
+
+		                }
+
+		        
+
+		                // Delay
+
+		                await ToSignal(GetTree().CreateTimer(1.0f), SceneTreeTimer.SignalName.Timeout);
+
+		        
+
+		                // Propagate destruction to children
+
+		                foreach (BaseNode child in Children)
+
+		                {
+
+		                    if (IsInstanceValid(child)) // Check if child is still valid before destroying
+
+		                    {
+
+		                        child.Destroy(); // Recursively destroy children
+
+		                    }
+
+		                }
+
+		                Children.Clear(); // Clear the list after triggering destruction
+
+		        
+
+		                // Actual removal
+
+		                QueueFree();
+
+		    }
 
 
 
