@@ -1,0 +1,37 @@
+[gd_scene load_steps=7 format=3 uid="uid://c6xgkfb15ktwi"]
+
+[ext_resource type="Script" uid="uid://cpjgc6sep8clf" path="res://BaseNode.cs" id="1_a0hpm"]
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_uqfem"]
+height = 0.2
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_a0hpm"]
+albedo_color = Color(1, 0, 0, 1)
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_g2ppn"]
+height = 0.2
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_1h4vy"]
+top_radius = 0.7
+bottom_radius = 0.7
+height = 0.02
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_jo2l5"]
+albedo_color = Color(0, 1, 1, 1)
+
+[node name="BaseNode" type="StaticBody3D"]
+script = ExtResource("1_a0hpm")
+metadata/_edit_group_ = true
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+mesh = SubResource("CylinderMesh_uqfem")
+surface_material_override/0 = SubResource("StandardMaterial3D_a0hpm")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("CylinderShape3D_g2ppn")
+
+[node name="HighlightRing" type="MeshInstance3D" parent="."]
+mesh = SubResource("CylinderMesh_1h4vy")
+surface_material_override/0 = SubResource("StandardMaterial3D_jo2l5")
+
+[node name="ConnectorAnchor" type="Node3D" parent="."]

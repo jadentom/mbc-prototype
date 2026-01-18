@@ -1,0 +1,85 @@
+[gd_scene load_steps=9 format=3 uid="uid://ntoepobspfl6"]
+
+[ext_resource type="Script" uid="uid://dvmv4ifdu3jbn" path="res://GameManager.cs" id="1_0f027"]
+[ext_resource type="PackedScene" uid="uid://c6xgkfb15ktwi" path="res://base_node.tscn" id="2_2c62f"]
+[ext_resource type="PackedScene" uid="uid://dlrv8n6as5e3c" path="res://projectile.tscn" id="2_gyfs4"]
+[ext_resource type="PackedScene" uid="uid://tgv713ba7oxf" path="res://bomb.tscn" id="3_d5x1h"]
+[ext_resource type="Texture2D" uid="uid://bn8uwugnns0t" path="res://Assets/Node.png" id="5_hq1ik"]
+[ext_resource type="Texture2D" uid="uid://cccp01qtnx6w7" path="res://Assets/Bomb.png" id="6_nfk4m"]
+
+[sub_resource type="PhysicsMaterial" id="PhysicsMaterial_o3jxj"]
+
+[sub_resource type="WorldBoundaryShape3D" id="WorldBoundaryShape3D_0f027"]
+
+[node name="World" type="Node3D"]
+metadata/_edit_group_ = true
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+
+[node name="Ground" type="StaticBody3D" parent="."]
+physics_material_override = SubResource("PhysicsMaterial_o3jxj")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Ground"]
+shape = SubResource("WorldBoundaryShape3D_0f027")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.70710677, 0.70710677, 0, -0.70710677, 0.70710677, 0, 10, 10)
+projection = 1
+size = 30.0
+
+[node name="GameManager" type="Node" parent="." node_paths=PackedStringArray("MainCamera", "PowerBar", "NodeIcon", "BombIcon", "SelectorBox")]
+script = ExtResource("1_0f027")
+MainCamera = NodePath("../Camera3D")
+PowerBar = NodePath("../UI/FireStrengthBar")
+NodeIcon = NodePath("../UI/HBoxContainer/NodeIcon")
+BombIcon = NodePath("../UI/HBoxContainer/BombIcon")
+SelectorBox = NodePath("../UI/Selector")
+ProjectileScene = ExtResource("2_gyfs4")
+BombScene = ExtResource("3_d5x1h")
+
+[node name="BaseNode" parent="." instance=ExtResource("2_2c62f")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 0)
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="FireStrengthBar" type="ProgressBar" parent="UI"]
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -12.0
+grow_horizontal = 2
+grow_vertical = 0
+max_value = 1.0
+show_percentage = false
+
+[node name="Label" type="Label" parent="UI"]
+offset_right = 40.0
+offset_bottom = 23.0
+text = "Arrow keys or WAD to launch. Q/E to select ammo. Click to select node"
+
+[node name="Selector" type="ColorRect" parent="UI"]
+offset_left = 77.0
+offset_top = 601.0
+offset_right = 109.0
+offset_bottom = 633.0
+color = Color(0, 1, 0, 1)
+
+[node name="HBoxContainer" type="HBoxContainer" parent="UI"]
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_top = -34.0
+offset_right = 107.0
+grow_vertical = 0
+
+[node name="NodeIcon" type="TextureRect" parent="UI/HBoxContainer"]
+layout_mode = 2
+size_flags_horizontal = 0
+texture = ExtResource("5_hq1ik")
+stretch_mode = 2
+
+[node name="BombIcon" type="TextureRect" parent="UI/HBoxContainer"]
+layout_mode = 2
+texture = ExtResource("6_nfk4m")
+stretch_mode = 2
