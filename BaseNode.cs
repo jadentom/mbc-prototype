@@ -7,6 +7,11 @@ public partial class BaseNode : StaticBody3D
 	public List<BaseNode> Children = new List<BaseNode>();
 	
 	private MeshInstance3D _highlight;
+	private ProgressBar _healthBar;
+	private SubViewport _viewport;
+
+	public int Health = 3;
+	private int _maxHealth = 3;
 
 	public override void _Ready()
 	{
@@ -20,7 +25,29 @@ public partial class BaseNode : StaticBody3D
 		if (ParentBase != null)
 		{
 			CreateCable();
-		}		
+		}
+
+		// Health Bar
+		var healthBarScene = GD.Load<PackedScene>("res://health_bar.tscn");
+		var healthBarInstance = healthBarScene.Instantiate<Control>();
+		
+		_viewport = new SubViewport();
+		_viewport.Size = new Vector2I(80, 10);
+		_viewport.RenderTargetUpdateMode = SubViewport.UpdateMode.Always;
+		_viewport.TransparentBg = true;
+		_viewport.AddChild(healthBarInstance);
+		AddChild(_viewport);
+
+		var sprite = new Sprite3D();
+		sprite.Texture = _viewport.GetTexture();
+		sprite.Position = new Vector3(0, 2, 0);
+		sprite.Scale = new Vector3(3, 3, 1);
+		sprite.Centered = true;
+		sprite.Billboard = BaseMaterial3D.BillboardModeEnum.Enabled;
+		AddChild(sprite);
+
+		_healthBar = healthBarInstance.GetNode<ProgressBar>("ProgressBar");
+		UpdateHealthBar();
 	}
 	
 	private void CreateCable()
@@ -61,4 +88,22 @@ public partial class BaseNode : StaticBody3D
 	}
 
 	public void SetHighlight(bool state) => _highlight.Visible = state;
+
+	public void TakeDamage(int amount)
+	{
+		Health -= amount;
+		UpdateHealthBar();
+		if (Health <= 0)
+		{
+			QueueFree();
+		}
+	}
+
+	private void UpdateHealthBar()
+	{
+		if (_healthBar != null)
+		{
+			_healthBar.Value = (float)Health / _maxHealth * 100;
+		}
+	}
 }
