@@ -1,6 +1,7 @@
-[gd_scene load_steps=9 format=3 uid="uid://ntoepobspfl6"]
+[gd_scene load_steps=12 format=3 uid="uid://ntoepobspfl6"]
 
 [ext_resource type="Script" uid="uid://dvmv4ifdu3jbn" path="res://GameManager.cs" id="1_0f027"]
+[ext_resource type="Texture2D" uid="uid://b285731ydsbg2" path="res://Assets/opengameart_grass.png" id="1_nfk4m"]
 [ext_resource type="PackedScene" uid="uid://c6xgkfb15ktwi" path="res://base_node.tscn" id="2_2c62f"]
 [ext_resource type="PackedScene" uid="uid://dlrv8n6as5e3c" path="res://projectile.tscn" id="2_gyfs4"]
 [ext_resource type="PackedScene" uid="uid://tgv713ba7oxf" path="res://bomb.tscn" id="3_d5x1h"]
@@ -10,6 +11,14 @@
 [sub_resource type="PhysicsMaterial" id="PhysicsMaterial_o3jxj"]
 
 [sub_resource type="WorldBoundaryShape3D" id="WorldBoundaryShape3D_0f027"]
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_66tet"]
+size = Vector2(10000, 10000)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_7ycvg"]
+shading_mode = 0
+albedo_texture = ExtResource("1_nfk4m")
+uv1_scale = Vector3(1500, 1500, 1500)
 
 [node name="World" type="Node3D"]
 metadata/_edit_group_ = true
@@ -21,6 +30,10 @@ physics_material_override = SubResource("PhysicsMaterial_o3jxj")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Ground"]
 shape = SubResource("WorldBoundaryShape3D_0f027")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Ground"]
+mesh = SubResource("PlaneMesh_66tet")
+surface_material_override/0 = SubResource("StandardMaterial3D_7ycvg")
 
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 0.70710677, 0.70710677, 0, -0.70710677, 0.70710677, 0, 10, 10)
