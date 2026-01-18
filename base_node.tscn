@@ -1,6 +1,7 @@
-[gd_scene load_steps=7 format=3 uid="uid://c6xgkfb15ktwi"]
+[gd_scene load_steps=8 format=3 uid="uid://c6xgkfb15ktwi"]
 
 [ext_resource type="Script" uid="uid://cpjgc6sep8clf" path="res://BaseNode.cs" id="1_a0hpm"]
+[ext_resource type="PackedScene" path="res://explosion.tscn" id="2_g2ppn"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_uqfem"]
 height = 0.2
@@ -21,6 +22,7 @@ albedo_color = Color(0, 1, 1, 1)
 
 [node name="BaseNode" type="StaticBody3D"]
 script = ExtResource("1_a0hpm")
+ExplosionScene = ExtResource("2_g2ppn")
 metadata/_edit_group_ = true
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="."]
