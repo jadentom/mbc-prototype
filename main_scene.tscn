@@ -40,13 +40,15 @@ transform = Transform3D(1, 0, 0, 0, 0.70710677, 0.70710677, 0, -0.70710677, 0.70
 projection = 1
 size = 30.0
 
-[node name="GameManager" type="Node" parent="." node_paths=PackedStringArray("MainCamera", "PowerBar", "NodeIcon", "BombIcon", "SelectorBox")]
+[node name="GameManager" type="Node" parent="." node_paths=PackedStringArray("MainCamera", "PowerBar", "NodeIcon", "BombIcon", "SelectorBox", "TurnLabel", "DefeatLabel")]
 script = ExtResource("1_0f027")
 MainCamera = NodePath("../Camera3D")
 PowerBar = NodePath("../UI/FireStrengthBar")
 NodeIcon = NodePath("../UI/HBoxContainer/NodeIcon")
 BombIcon = NodePath("../UI/HBoxContainer/BombIcon")
 SelectorBox = NodePath("../UI/Selector")
+TurnLabel = NodePath("../UI/TurnLabel")
+DefeatLabel = NodePath("../UI/DefeatLabel")
 ProjectileScene = ExtResource("2_gyfs4")
 BombScene = ExtResource("3_d5x1h")
 
@@ -98,3 +100,35 @@ stretch_mode = 2
 layout_mode = 2
 texture = ExtResource("6_nfk4m")
 stretch_mode = 2
+
+[node name="TurnLabel" type="Label" parent="UI"]
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -160.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = 40.0
+grow_horizontal = 0
+theme_override_font_sizes/font_size = 24
+text = "Turn: 1"
+horizontal_alignment = 2
+
+[node name="DefeatLabel" type="Label" parent="UI"]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -150.0
+offset_top = -40.0
+offset_right = 150.0
+offset_bottom = 40.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(1, 0.2, 0.2, 1)
+theme_override_font_sizes/font_size = 56
+text = "DEFEAT"
+horizontal_alignment = 1
+vertical_alignment = 1
+visible = false

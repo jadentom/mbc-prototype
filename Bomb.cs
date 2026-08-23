@@ -5,6 +5,12 @@ public partial class Bomb : CharacterBody3D
 	public float Gravity = 9.8f;
 	[Export] public GpuParticles3D ExplosionParticles;
 
+	/// <summary>
+	/// Resolved when this bomb finishes exploding. Part of the
+	/// turn-resolution system: the turn cannot end until this event resolves.
+	/// </summary>
+	public TurnEvent TurnEvent;
+
 	private bool _exploded = false;
 
 	public override void _PhysicsProcess(double delta)
@@ -45,7 +51,9 @@ public partial class Bomb : CharacterBody3D
 		}
 
 		// Wait for particles to finish (lifetime is 0.5s)
-		await ToSignal(GetTree().CreateTimer(0.6f), "timeout");
+		await ToSignal(GetTree().CreateTimer(0.6f), SceneTreeTimer.SignalName.Timeout);
 		QueueFree();
+
+		TurnEvent?.MarkResolved();
 	}
 }
