@@ -71,7 +71,7 @@ show_percentage = false
 [node name="Label" type="Label" parent="UI"]
 offset_right = 40.0
 offset_bottom = 23.0
-text = "Arrow keys or WAD to launch. Q/E to select ammo. Click to select node"
+text = "Arrow keys or WAD to launch. Q/E to select ammo. Click to select node. Move mouse to screen edge to pan. Click minimap to jump"
 
 [node name="Selector" type="ColorRect" parent="UI"]
 anchors_preset = 2

@@ -23,7 +23,29 @@ public partial class GameManager : Node
 
 	[ExportGroup("Camera Settings")]
 	[Export] public float CameraSmoothTime = 0.5f;
-	
+
+	[ExportGroup("Camera Panning")]
+	[Export] public float PanSpeed = 60.0f;
+	[Export] public int PanEdgeMargin = 48;
+	[Export] public Vector2 PanBoundsMin = new Vector2(-5000, -5000);
+	[Export] public Vector2 PanBoundsMax = new Vector2(5000, 5000);
+
+	[ExportGroup("Minimap")]
+	[Export] public Vector2 MinimapCenter = new Vector2(0, 0);
+	// World side length shown. 1500^2 -> 475^2 cuts the covered area ~10x
+	// (2250000 vs 225625) while keeping the on-screen widget small.
+	[Export] public float MinimapWorldSize = 475.0f;
+	// On-screen minimap side as a fraction of the window's shorter side
+	// (e.g. 0.25 -> 162px at 648px window height, 270px at 1080p).
+	[Export(PropertyHint.Range, "0.05, 0.5")]
+	public float MinimapScreenFraction = 0.25f;
+	[Export] public Color MinimapViewRectColor = new Color(1, 1, 1, 0.4f);
+	[Export] public Vector2 MinimapMarkerSize = new Vector2(3, 3);
+	[Export] public Color MinimapNodeColor = new Color(0, 0, 0, 0.9f);
+	[Export] public Color MinimapSelectedNodeColor = new Color(1, 1, 0, 1);
+	[Export] public Color MinimapLineColor = new Color(0, 0, 0, 0.7f);
+	[Export] public float MinimapLineWidth = 1.0f;
+
 	[ExportGroup("UI References")]
 	[Export] public TextureRect NodeIcon;
 	[Export] public TextureRect BombIcon;
@@ -57,6 +79,29 @@ public partial class GameManager : Node
 	private bool _isChargingUp = true;
 	private AmmoType _currentAmmo = AmmoType.Node;
 
+	// In-flight camera centering tween, killed the moment the player pans.
+	private Tween _cameraTween;
+
+	// Minimap widgets (created at runtime in CreateMinimap).
+	private SubViewport _minimapViewport;
+	private Camera3D _minimapCamera;
+	private TextureRect _minimapRect;
+	private ColorRect _minimapFrame;
+	private ColorRect _minimapViewIndicator;
+	private Vector2I _lastMinimapPixelSize = Vector2I.Zero;
+
+	// Node markers on the minimap (BaseNode -> dot), reconciled every frame.
+	private readonly Dictionary<BaseNode, ColorRect> _minimapMarkers = new Dictionary<BaseNode, ColorRect>();
+
+	// Connection lines on the minimap (child node -> line to its parent),
+	// reconciled every frame. Drawn under the markers via a dedicated layer.
+	private readonly Dictionary<BaseNode, Line2D> _minimapLines = new Dictionary<BaseNode, Line2D>();
+	private Node2D _minimapLineLayer;
+
+	// True while the OS cursor is inside the game window. Edge panning is
+	// disabled otherwise so a stale edge position never keeps panning.
+	private bool _mouseInsideWindow = true;
+
 	// Every BaseNode currently in the game, for locating surviving chain roots.
 	private readonly List<BaseNode> _allNodes = new List<BaseNode>();
 
@@ -78,10 +123,18 @@ public partial class GameManager : Node
 		}
 
 		CreateAimIndicator();
+		CreateMinimap();
 		UpdateSelectedAmmo();
 		if (PowerBar != null) PowerBar.Visible = false;
 		if (DefeatLabel != null) DefeatLabel.Visible = false;
 		UpdateTurnLabel();
+
+		// Track whether the OS cursor is inside the game window so edge
+		// panning never triggers from a stale position after it leaves.
+		Window window = GetWindow();
+		window.MouseEntered += () => _mouseInsideWindow = true;
+		window.MouseExited += () => _mouseInsideWindow = false;
+		window.SizeChanged += UpdateMinimapLayout; // Keep the minimap sized to the window.
 	}
 
 	private void UpdateSelectedAmmo()
@@ -146,6 +199,11 @@ public partial class GameManager : Node
 
 	public override void _Process(double delta)
 	{
+		HandleCameraPanning((float)delta);
+		UpdateMinimapViewIndicator();
+		UpdateMinimapMarkers();
+		UpdateMinimapLines();
+
 		// Safety net: never keep control pointed at a destroyed node.
 		// If the selected node dies, control reverts to the highest
 		// remaining node in the chain (or ends the game in defeat if none
@@ -425,17 +483,411 @@ public partial class GameManager : Node
 	{
 		if (MainCamera == null) return;
 
+		// Stop any in-flight panning/centering tween first.
+		if (_cameraTween != null && _cameraTween.IsValid())
+		{
+			_cameraTween.Kill();
+		}
+
 		// Calculate destination based on ground position to keep height consistent
 		Vector3 groundLevel = new Vector3(targetPosition.X, 0, targetPosition.Z);
 		Vector3 destination = groundLevel + _cameraOffset;
 
-		Tween tween = GetTree().CreateTween();
-		tween.SetTrans(Tween.TransitionType.Expo); 
-		tween.SetEase(Tween.EaseType.Out);
+		_cameraTween = GetTree().CreateTween();
+		_cameraTween.SetTrans(Tween.TransitionType.Expo); 
+		_cameraTween.SetEase(Tween.EaseType.Out);
 		
-		tween.TweenProperty(MainCamera, "global_position", destination, CameraSmoothTime);
+		_cameraTween.TweenProperty(MainCamera, "global_position", destination, CameraSmoothTime);
 		
 		// Optional: Ensure camera doesn't accidentally rotate
-		tween.Parallel().TweenProperty(MainCamera, "global_rotation", MainCamera.GlobalRotation, CameraSmoothTime);
+		_cameraTween.Parallel().TweenProperty(MainCamera, "global_rotation", MainCamera.GlobalRotation, CameraSmoothTime);
+	}
+
+	// ------------------------------------------------------------------
+	// Camera: minimap & screen-edge panning
+	// ------------------------------------------------------------------
+
+	/// <summary>
+	/// Builds the RTS-style minimap: a SubViewport with a top-down camera
+	/// rendered into a TextureRect in the bottom-right corner, plus a
+	/// translucent rectangle showing the main camera's current view.
+	/// Clicking the minimap centers the main camera on that spot.
+	///
+	/// The minimap currently shows a fixed-size subset of the (effectively
+	/// infinite) ground plane — see GetMinimapWorldRect() for the single
+	/// seam to swap in a real map-sized region later.
+	/// </summary>
+	private void CreateMinimap()
+	{
+		if (MainCamera == null) return;
+		var uiLayer = GetNodeOrNull<CanvasLayer>("../UI");
+		if (uiLayer == null) return;
+
+		MinimapWorldSize = Mathf.Max(MinimapWorldSize, 1f);
+
+		// 1. Off-screen SubViewport that re-renders the shared 3D world top-down.
+		// Its resolution is matched to the on-screen widget by UpdateMinimapLayout().
+		_minimapViewport = new SubViewport
+		{
+			Name = "MinimapViewport",
+			Size = new Vector2I(256, 256),
+			TransparentBg = false,
+			RenderTargetUpdateMode = SubViewport.UpdateMode.Always,
+			GuiDisableInput = true,
+			PhysicsObjectPicking = false,
+			OwnWorld3D = false, // Render the same world the player sees.
+		};
+
+		_minimapCamera = new Camera3D
+		{
+			Name = "MinimapCamera",
+			Projection = Camera3D.ProjectionType.Orthogonal,
+			Size = MinimapWorldSize,
+			Position = new Vector3(MinimapCenter.X, 2000, MinimapCenter.Y),
+			RotationDegrees = new Vector3(-90, 0, 0),
+			Near = 1.0f,
+			Far = 4000.0f,
+		};
+		_minimapViewport.AddChild(_minimapCamera);
+		_minimapCamera.Current = true; // Make it the viewport's active camera.
+		AddChild(_minimapViewport);
+
+		// 2. A thin frame behind the minimap so it stands out on the ground.
+		_minimapFrame = new ColorRect
+		{
+			Name = "MinimapFrame",
+			Color = new Color(0, 0, 0, 0.6f),
+			MouseFilter = Control.MouseFilterEnum.Ignore,
+		};
+		_minimapFrame.SetAnchorsPreset(Control.LayoutPreset.BottomRight);
+		uiLayer.AddChild(_minimapFrame);
+
+		// 3. The on-screen minimap widget (bottom-right corner).
+		_minimapRect = new TextureRect
+		{
+			Name = "Minimap",
+			Texture = _minimapViewport.GetTexture(),
+			ClipContents = true,
+			MouseFilter = Control.MouseFilterEnum.Stop,
+		};
+		_minimapRect.SetAnchorsPreset(Control.LayoutPreset.BottomRight);
+		uiLayer.AddChild(_minimapRect);
+
+		// 4. Translucent rectangle showing where the main camera is looking.
+		_minimapViewIndicator = new ColorRect
+		{
+			Name = "ViewIndicator",
+			Color = MinimapViewRectColor,
+			MouseFilter = Control.MouseFilterEnum.Ignore,
+		};
+		_minimapRect.AddChild(_minimapViewIndicator);
+
+		// 5. Layer for parent->child connection lines. Added before any
+		// marker dots exist, so lines always draw underneath the dots.
+		_minimapLineLayer = new Node2D { Name = "ConnectionLines" };
+		_minimapRect.AddChild(_minimapLineLayer);
+
+		// 6. Clicking the minimap moves the camera to that spot.
+		_minimapRect.GuiInput += OnMinimapGuiInput;
+
+		// Size the widget (and viewport) for the current window.
+		UpdateMinimapLayout();
+	}
+
+	/// <summary>
+	/// Sizes the minimap to the game window: its side is
+	/// MinimapScreenFraction of the window's shorter side. The SubViewport
+	/// resolution is matched to the widget so the render stays crisp, and
+	/// the frame hugs the widget. Runs on window resize; every minimap
+	/// mapping reads _minimapRect.Size, so this is the only place that
+	/// needs to know the pixel layout.
+	/// </summary>
+	private void UpdateMinimapLayout()
+	{
+		if (_minimapRect == null || _minimapViewport == null || _minimapFrame == null) return;
+
+		Vector2 viewportSize = GetViewport().GetVisibleRect().Size;
+		float side = Mathf.Max(1f, Mathf.Min(viewportSize.X, viewportSize.Y) * MinimapScreenFraction);
+		Vector2I pixelSize = new Vector2I(Mathf.RoundToInt(side), Mathf.RoundToInt(side));
+		if (pixelSize == _lastMinimapPixelSize) return;
+		_lastMinimapPixelSize = pixelSize;
+
+		_minimapViewport.Size = pixelSize;
+
+		_minimapRect.OffsetLeft = -pixelSize.X - 8;
+		_minimapRect.OffsetTop = -pixelSize.Y - 8;
+		_minimapRect.OffsetRight = -8;
+		_minimapRect.OffsetBottom = -8;
+
+		_minimapFrame.OffsetLeft = -pixelSize.X - 10;
+		_minimapFrame.OffsetTop = -pixelSize.Y - 10;
+		_minimapFrame.OffsetRight = -6;
+		_minimapFrame.OffsetBottom = -6;
+	}
+
+	private void OnMinimapGuiInput(InputEvent @event)
+	{
+		if (_minimapRect == null) return;
+		if (@event is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
+		{
+			Vector2 local = _minimapRect.GetLocalMousePosition();
+			Vector2 size = _minimapRect.Size;
+			if (size.X <= 0f || size.Y <= 0f) return;
+
+			// Map the click to a world position on the ground plane.
+			float nx = Mathf.Clamp(local.X / size.X, 0f, 1f);
+			float ny = Mathf.Clamp(local.Y / size.Y, 0f, 1f);
+			Rect2 worldRect = GetMinimapWorldRect();
+			Vector3 target = new Vector3(
+				worldRect.Position.X + nx * worldRect.Size.X,
+				0f,
+				worldRect.Position.Y + ny * worldRect.Size.Y);
+			CenterCameraOn(target);
+		}
+	}
+
+	/// <summary>
+	/// The world-space XZ rectangle the minimap displays.
+	///
+	/// Currently a fixed-size subset of the (effectively infinite) ground
+	/// plane: MinimapWorldSize wide/tall centered on MinimapCenter. When a
+	/// real map with defined bounds exists, replace the body of this method
+	/// with a rect derived from the map size (e.g. from PanBoundsMin/Max) so
+	/// the minimap automatically scales to the whole map. The top-down camera
+	/// size in CreateMinimap() must then follow the same rect.
+	/// </summary>
+	private Rect2 GetMinimapWorldRect()
+	{
+		float half = MinimapWorldSize * 0.5f;
+		return new Rect2(MinimapCenter.X - half, MinimapCenter.Y - half, MinimapWorldSize, MinimapWorldSize);
+	}
+
+	/// <summary>Converts a world-space XZ position to minimap pixel coordinates.</summary>
+	private Vector2 WorldToMinimap(Vector2 worldXZ)
+	{
+		if (_minimapRect == null) return Vector2.Zero;
+		Rect2 worldRect = GetMinimapWorldRect();
+		Vector2 normalized = new Vector2(
+			(worldXZ.X - worldRect.Position.X) / worldRect.Size.X,
+			(worldXZ.Y - worldRect.Position.Y) / worldRect.Size.Y);
+		return new Vector2(normalized.X * _minimapRect.Size.X, normalized.Y * _minimapRect.Size.Y);
+	}
+
+	/// <summary>
+	/// Positions and sizes the minimap's view indicator to match the main
+	/// camera's ground footprint.
+	/// </summary>
+	private void UpdateMinimapViewIndicator()
+	{
+		if (_minimapRect == null || _minimapViewIndicator == null || MainCamera == null) return;
+
+		// Ray from the main camera through the screen center down to the ground.
+		Vector3 camPos = MainCamera.GlobalPosition;
+		Vector3 forward = -MainCamera.GlobalTransform.Basis.Z;
+		if (Mathf.Abs(forward.Y) < 0.001f) return;
+		float t = -camPos.Y / forward.Y;
+		if (t < 0f) return; // Camera not looking at the ground plane.
+		Vector3 groundLookAt = camPos + forward * t;
+
+		// Project the camera's screen-space footprint onto the ground plane.
+		Vector3 up = MainCamera.GlobalTransform.Basis.Y;
+		Vector3 right = MainCamera.GlobalTransform.Basis.X;
+		Vector2 upGround = new Vector2(up.X, up.Z);
+		Vector2 rightGround = new Vector2(right.X, right.Z);
+		if (upGround.LengthSquared() < 0.001f || rightGround.LengthSquared() < 0.001f) return;
+
+		float aspect = GetViewportAspect();
+		float halfHeightWorld = (MainCamera.Size * 0.5f) / upGround.Length();
+		float halfWidthWorld = (MainCamera.Size * 0.5f * aspect) / rightGround.Length();
+
+		Vector2 center = WorldToMinimap(new Vector2(groundLookAt.X, groundLookAt.Z));
+		Rect2 worldRect = GetMinimapWorldRect();
+		Vector2 halfMinimap = new Vector2(
+			halfWidthWorld / worldRect.Size.X * _minimapRect.Size.X,
+			halfHeightWorld / worldRect.Size.Y * _minimapRect.Size.Y);
+
+		_minimapViewIndicator.Position = center - halfMinimap;
+		_minimapViewIndicator.Size = halfMinimap * 2f;
+	}
+
+	private float GetViewportAspect()
+	{
+		Vector2 size = GetViewport().GetVisibleRect().Size;
+		return size.Y > 0f ? size.X / size.Y : 1f;
+	}
+
+	/// <summary>
+	/// Reconciles the minimap's node markers: creates a dot for every live
+	/// node (black) and highlights the selected node (yellow), and removes
+	/// markers for nodes that have been destroyed. Dots are plain ColorRects
+	/// clipped to the minimap, so anything outside the shown region vanishes.
+	/// </summary>
+	private void UpdateMinimapMarkers()
+	{
+		if (_minimapRect == null) return;
+
+		foreach (BaseNode node in _allNodes)
+		{
+			if (node == null || !IsInstanceValid(node) || node.IsDestroyed) continue;
+
+			if (!_minimapMarkers.TryGetValue(node, out ColorRect marker) || !IsInstanceValid(marker))
+			{
+				marker = new ColorRect
+				{
+					Size = MinimapMarkerSize,
+					Color = MinimapNodeColor,
+					MouseFilter = Control.MouseFilterEnum.Ignore,
+				};
+				_minimapRect.AddChild(marker);
+				_minimapMarkers[node] = marker;
+			}
+
+			marker.Color = (node == SelectedNode) ? MinimapSelectedNodeColor : MinimapNodeColor;
+			Vector2 pos = WorldToMinimap(new Vector2(node.GlobalPosition.X, node.GlobalPosition.Z));
+			marker.Position = pos - marker.Size * 0.5f;
+		}
+
+		// Drop markers whose node has been destroyed, freed, or left the
+		// registry since last frame.
+		List<BaseNode> dead = null;
+		foreach (KeyValuePair<BaseNode, ColorRect> pair in _minimapMarkers)
+		{
+			if (!IsInstanceValid(pair.Key) || pair.Key.IsDestroyed || !_allNodes.Contains(pair.Key))
+			{
+				pair.Value.QueueFree();
+				if (dead == null) dead = new List<BaseNode>();
+				dead.Add(pair.Key);
+			}
+		}
+		if (dead != null)
+		{
+			foreach (BaseNode key in dead)
+			{
+				_minimapMarkers.Remove(key);
+			}
+		}
+	}
+
+	/// <summary>
+	/// Reconciles the minimap's connection lines: a plain line for every
+	/// child node with a live parent, drawn between the two dots (no
+	/// directionality). Lines live in their own layer under the markers and
+	/// are clipped to the minimap like everything else.
+	/// </summary>
+	private void UpdateMinimapLines()
+	{
+		if (_minimapLineLayer == null) return;
+
+		foreach (BaseNode node in _allNodes)
+		{
+			if (node == null || !IsInstanceValid(node) || node.IsDestroyed) continue;
+			BaseNode parent = node.ParentBase;
+			if (parent == null || !IsInstanceValid(parent) || parent.IsDestroyed) continue;
+
+			if (!_minimapLines.TryGetValue(node, out Line2D line) || !IsInstanceValid(line))
+			{
+				line = new Line2D
+				{
+					Width = MinimapLineWidth,
+					DefaultColor = MinimapLineColor,
+				};
+				_minimapLineLayer.AddChild(line);
+				_minimapLines[node] = line;
+			}
+
+			line.Points = new[]
+			{
+				WorldToMinimap(new Vector2(parent.GlobalPosition.X, parent.GlobalPosition.Z)),
+				WorldToMinimap(new Vector2(node.GlobalPosition.X, node.GlobalPosition.Z)),
+			};
+		}
+
+		// Drop lines whose node (or its parent) has died or left the chain.
+		List<BaseNode> dead = null;
+		foreach (KeyValuePair<BaseNode, Line2D> pair in _minimapLines)
+		{
+			BaseNode node = pair.Key;
+			BaseNode parent = node?.ParentBase;
+			if (!IsInstanceValid(node) || node.IsDestroyed || !_allNodes.Contains(node)
+				|| parent == null || !IsInstanceValid(parent) || parent.IsDestroyed)
+			{
+				pair.Value.QueueFree();
+				if (dead == null) dead = new List<BaseNode>();
+				dead.Add(node);
+			}
+		}
+		if (dead != null)
+		{
+			foreach (BaseNode key in dead)
+			{
+				_minimapLines.Remove(key);
+			}
+		}
+	}
+
+	/// <summary>
+	/// Pans the camera when the mouse cursor is near a screen edge, in
+	/// classic RTS style. Speed ramps up the deeper the cursor sits inside
+	/// the edge margin. Never fights a centering tween — panning wins.
+	/// </summary>
+	private void HandleCameraPanning(float delta)
+	{
+		if (MainCamera == null) return;
+		// Never pan from a stale position: the cursor must actually be inside
+		// the game window and the window focused.
+		if (!_mouseInsideWindow) return;
+		if (!GetViewport().GetWindow().HasFocus()) return;
+		// Don't pan while the cursor is over UI (minimap, ammo bar, labels).
+		if (GetViewport().GuiGetHoveredControl() != null) return;
+
+		Vector2 mouse = GetViewport().GetMousePosition();
+		Vector2 viewportSize = GetViewport().GetVisibleRect().Size;
+		if (viewportSize.X <= 0f || viewportSize.Y <= 0f) return;
+
+		float margin = PanEdgeMargin;
+		Vector2 panDir = Vector2.Zero;
+		float edgeDepth = 0f;
+
+		if (mouse.X <= margin)
+		{
+			panDir.X = -1f;
+			edgeDepth = Mathf.Max(edgeDepth, Mathf.Clamp((margin - mouse.X) / margin, 0f, 1f));
+		}
+		else if (mouse.X >= viewportSize.X - margin)
+		{
+			panDir.X = 1f;
+			edgeDepth = Mathf.Max(edgeDepth, Mathf.Clamp((mouse.X - (viewportSize.X - margin)) / margin, 0f, 1f));
+		}
+
+		if (mouse.Y <= margin)
+		{
+			panDir.Y = -1f;
+			edgeDepth = Mathf.Max(edgeDepth, Mathf.Clamp((margin - mouse.Y) / margin, 0f, 1f));
+		}
+		else if (mouse.Y >= viewportSize.Y - margin)
+		{
+			panDir.Y = 1f;
+			edgeDepth = Mathf.Max(edgeDepth, Mathf.Clamp((mouse.Y - (viewportSize.Y - margin)) / margin, 0f, 1f));
+		}
+
+		if (panDir == Vector2.Zero) return;
+
+		// Take over from any in-flight centering tween.
+		if (_cameraTween != null && _cameraTween.IsValid())
+		{
+			_cameraTween.Kill();
+		}
+
+		// Convert the screen-space pan direction to a ground-plane direction.
+		Vector3 move = MainCamera.GlobalTransform.Basis.X * panDir.X
+					 + MainCamera.GlobalTransform.Basis.Y * (-panDir.Y);
+		move.Y = 0f;
+		if (move.LengthSquared() < 0.0001f) return;
+		move = move.Normalized();
+
+		Vector3 newPos = MainCamera.GlobalPosition + move * (PanSpeed * edgeDepth * delta);
+		newPos.X = Mathf.Clamp(newPos.X, Mathf.Min(PanBoundsMin.X, PanBoundsMax.X), Mathf.Max(PanBoundsMin.X, PanBoundsMax.X));
+		newPos.Z = Mathf.Clamp(newPos.Z, Mathf.Min(PanBoundsMin.Y, PanBoundsMax.Y), Mathf.Max(PanBoundsMin.Y, PanBoundsMax.Y));
+		MainCamera.GlobalPosition = newPos;
 	}
 }
