@@ -1,4 +1,8 @@
 using Godot;
+using MbcPrototype.Core;
+using MbcPrototype.TurnSystem;
+
+namespace MbcPrototype.Combat;
 
 public partial class Bomb : CharacterBody3D
 {

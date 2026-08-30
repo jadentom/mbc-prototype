@@ -1,6 +1,6 @@
 [gd_scene load_steps=4 format=3 uid="uid://dlrv8n6as5e3c"]
 
-[ext_resource type="Script" uid="uid://baetd4ryy6csr" path="res://Projectile.cs" id="1_a85iw"]
+[ext_resource type="Script" uid="uid://baetd4ryy6csr" path="res://Scripts/Combat/Projectile.cs" id="1_a85iw"]
 
 [sub_resource type="SphereMesh" id="SphereMesh_akgne"]
 radius = 0.2

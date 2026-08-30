@@ -1,5 +1,7 @@
 using System;
 
+namespace MbcPrototype.TurnSystem;
+
 /// <summary>
 /// A discrete unit of work that must finish before the current turn's resolution
 /// completes and control returns to the player.

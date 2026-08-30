@@ -1,10 +1,10 @@
 [gd_scene load_steps=12 format=3 uid="uid://ntoepobspfl6"]
 
-[ext_resource type="Script" uid="uid://dvmv4ifdu3jbn" path="res://GameManager.cs" id="1_0f027"]
+[ext_resource type="Script" uid="uid://dvmv4ifdu3jbn" path="res://Scripts/Core/GameManager.cs" id="1_0f027"]
 [ext_resource type="Texture2D" uid="uid://b285731ydsbg2" path="res://Assets/opengameart_grass.png" id="1_nfk4m"]
-[ext_resource type="PackedScene" uid="uid://c6xgkfb15ktwi" path="res://base_node.tscn" id="2_2c62f"]
-[ext_resource type="PackedScene" uid="uid://dlrv8n6as5e3c" path="res://projectile.tscn" id="2_gyfs4"]
-[ext_resource type="PackedScene" uid="uid://tgv713ba7oxf" path="res://bomb.tscn" id="3_d5x1h"]
+[ext_resource type="PackedScene" uid="uid://c6xgkfb15ktwi" path="res://Scenes/base_node.tscn" id="2_2c62f"]
+[ext_resource type="PackedScene" uid="uid://dlrv8n6as5e3c" path="res://Scenes/projectile.tscn" id="2_gyfs4"]
+[ext_resource type="PackedScene" uid="uid://tgv713ba7oxf" path="res://Scenes/bomb.tscn" id="3_d5x1h"]
 [ext_resource type="Texture2D" uid="uid://bn8uwugnns0t" path="res://Assets/Node.png" id="5_hq1ik"]
 [ext_resource type="Texture2D" uid="uid://cccp01qtnx6w7" path="res://Assets/Bomb.png" id="6_nfk4m"]
 

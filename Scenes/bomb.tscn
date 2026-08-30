@@ -1,6 +1,6 @@
 [gd_scene load_steps=10 format=3 uid="uid://tgv713ba7oxf"]
 
-[ext_resource type="Script" uid="uid://buvktxygneclm" path="res://Bomb.cs" id="1_573fp"]
+[ext_resource type="Script" uid="uid://buvktxygneclm" path="res://Scripts/Combat/Bomb.cs" id="1_573fp"]
 
 [sub_resource type="SphereMesh" id="SphereMesh_4fn8o"]
 radius = 0.2

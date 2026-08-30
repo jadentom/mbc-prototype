@@ -1,8 +1,12 @@
 using Godot;
+using MbcPrototype.Core;
+using MbcPrototype.TurnSystem;
+
+namespace MbcPrototype.Combat;
 
 public partial class Projectile : CharacterBody3D
 {
-	[Export] public PackedScene BaseScene = GD.Load<PackedScene>("res://base_node.tscn");
+	[Export] public PackedScene BaseScene = GD.Load<PackedScene>("res://Scenes/base_node.tscn");
 	public float Gravity = 9.8f;
 	public BaseNode CreatorNode;
 

@@ -1,5 +1,7 @@
 using Godot;
 
+namespace MbcPrototype.Combat;
+
 public partial class Explosion : Node3D
 {
     private MeshInstance3D _sphere;

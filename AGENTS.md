@@ -7,9 +7,10 @@ prototype built with **Godot 4.5.1 (C#/.NET)**. Read this before editing.
 
 - Engine: Godot 4.5.1 stable, GL Compatibility renderer, C# (.NET 8,
   `Godot.NET.Sdk/4.5.1`). Assembly name `MbcPrototype`.
-- Single scene: `main_scene.tscn` (`res://`) — a 3D world where the player
-  controls a chain of nodes, aims with arrow keys, and launches projectiles
-  or bombs. Turns resolve only after every in-flight event completes.
+- Single scene: `Scenes/main_scene.tscn` (`res://`) — a 3D world where the
+  player controls a chain of nodes, aims with arrow keys, and launches
+  projectiles or bombs. Turns resolve only after every in-flight event
+  completes.
 - Ground is a 10000×10000 plane (effectively infinite play space). The play
   area that matters today is around the origin; there is **no real map size
   yet**.
@@ -30,7 +31,7 @@ prototype built with **Godot 4.5.1 (C#/.NET)**. Read this before editing.
 - Do not leave temporary probe/test scenes or `.gd` scripts in the repo
   (they also generate `.uid` files that must be removed).
 
-## Scene structure (`main_scene.tscn`)
+## Scene structure (`Scenes/main_scene.tscn`)
 
 ```
 World (Node3D)
@@ -50,17 +51,17 @@ World (Node3D)
 
 The minimap is **built at runtime** by `GameManager.CreateMinimap()` (a
 `SubViewport` + top-down camera + `TextureRect` in the bottom-right corner),
-not stored in the scene.
+not stored in the scene. See [docs/camera](docs/camera/README.md).
 
 ## Core scripts
 
 | File | Role |
 | --- | --- |
-| `GameManager.cs` | Singleton (`GameManager.Instance`), turn flow, aiming/firing, camera (centering, **edge panning**, **minimap**). |
-| `BaseNode.cs` | Chain node: health, highlight ring, cable to parent, health-bar SubViewport sprite, destruction cascade. |
-| `Projectile.cs` / `Bomb.cs` | Ammo: ballistic bodies that damage `BaseNode`s and resolve a `TurnEvent`. |
-| `TurnEvent.cs` | One unit of turn resolution; the turn ends when all pending events resolve. |
-| `CableShader.gdshader` | Visual cable between chained nodes. |
+| `Scripts/Core/GameManager.cs` | Singleton (`GameManager.Instance`), turn flow, aiming/firing, camera (centering, **edge panning**, **minimap** — see [docs/camera](docs/camera/README.md)). |
+| `Scripts/Core/BaseNode.cs` | Chain node: health, highlight ring, cable to parent, health-bar SubViewport sprite, destruction cascade. |
+| `Scripts/Combat/Projectile.cs` / `Scripts/Combat/Bomb.cs` | Ammo: ballistic bodies that damage `BaseNode`s and resolve a `TurnEvent`. |
+| `Scripts/TurnSystem/TurnEvent.cs` | One unit of turn resolution; the turn ends when all pending events resolve. |
+| `Shaders/CableShader.gdshader` | Visual cable between chained nodes. |
 
 ## Key mechanics & invariants
 
@@ -81,42 +82,17 @@ not stored in the scene.
 
 ## Camera: centering, panning, minimap
 
-- The main camera is orthographic, tilted ~45°, looking down toward -Z. Its
-  serialized `Transform3D` in the .tscn is easy to misread — verify against
-  the runtime basis if it matters (confirmed: forward = (0, -0.7071,
-  -0.7071), screen-up projects to -Z on the ground).
-- `CenterCameraOn()` tweens to `target.XZ + _cameraOffset`. The tween is
-  stored in `_cameraTween` and **killed whenever the player pans** so pan
-  never fights centering.
-- `HandleCameraPanning()` (edge panning): pans when the cursor is within
-  `PanEdgeMargin` px of a screen edge, speed ramping with edge depth. Guards:
-  window must have focus, the OS cursor must be inside the window (tracked
-  via `Window.MouseEntered/MouseExited` in `_Ready` — this prevents stale
-  edge positions from panning once the cursor leaves), and no Control may be
-  hovered (so it never fights the minimap or ammo bar).
-- Minimap: a square `SubViewport` re-renders the shared world
-  (`OwnWorld3D=false`) through a straight-down orthographic camera
-  (`Current=true` **after** `AddChild`). It shows a fixed
-  `MinimapWorldSize`-square region centered on `MinimapCenter` (default
-  475×475 ≈ 10x less area than the original 1500×1500; the ground has no
-  real bounds yet). The widget scales with the game window: its side is
-  `MinimapScreenFraction` (0.25) of the window's shorter side, and
-  `UpdateMinimapLayout()` (called from `_Ready` and on `Window.SizeChanged`)
-  matches the SubViewport resolution to the widget so it stays crisp.
-  Features:
-  - translucent white rectangle = main camera view footprint
-    (`UpdateMinimapViewIndicator()`);
-  - black dots = nodes, yellow dot = selected node
-    (`UpdateMinimapMarkers()`, reconciled against `_allNodes` every frame);
-  - plain lines connecting each child dot to its parent dot
-    (`UpdateMinimapLines()`, drawn under the dots on a dedicated `Line2D`
-    layer — no directionality);
-  - left-click centers the camera on that world spot
-    (`OnMinimapGuiInput`).
-- **Scaling seam**: every world↔minimap mapping goes through
-  `GetMinimapWorldRect()`. When a real map with bounds exists, replace that
-  method's body (e.g. derive from `PanBoundsMin/Max`) and the top-down
-  camera `Size` in `CreateMinimap()` — the whole minimap rescales.
+Full documentation lives in **[docs/camera/README.md](docs/camera/README.md)** —
+read it before touching anything camera-related. In short:
+
+- Main camera: orthographic, tilted ~45°, looking down toward -Z.
+- `CenterCameraOn()` tweens to `target.XZ + _cameraOffset`; the tween is
+  killed whenever the player pans so pan never fights centering.
+- `HandleCameraPanning()` (edge panning) requires window focus, the OS cursor
+  inside the window, and no hovered Control.
+- Minimap: a runtime-built square `SubViewport` with a top-down camera,
+  rendered into a `TextureRect` (bottom-right); every world↔minimap mapping
+  goes through `GetMinimapWorldRect()` (the scaling seam for a real map).
 
 ## Input map (`project.godot`)
 
@@ -129,12 +105,7 @@ not stored in the scene.
 
 - Tabs for indentation, Allman braces, XML doc comments on public members;
   comments already in the file use `//` and `///` — keep that style.
-- Code-built UI (minimap) uses `SetAnchorsPreset` + explicit offsets; a
-  Control under a `CanvasLayer` anchors to the viewport, not a parent
-  Control.
-- `SubViewport` minimap: set `GuiDisableInput=true` and
-  `PhysicsObjectPicking=false` so clicks on it never leak into 3D picking;
-  handle clicks on the `TextureRect` via `GuiInput`.
-- Minimap markers are plain `ColorRect`s clipped by `ClipContents=true`.
-- When adding features that touch the camera, keep the pan-vs-tween and
-  cursor-inside-window invariants intact.
+- Camera/minimap-specific gotchas (SetAnchorsPreset layout, SubViewport input
+  isolation, clipped markers, pan-vs-tween invariants) live in
+  [docs/camera/README.md](docs/camera/README.md) — see the *Invariants &
+  gotchas* section there.

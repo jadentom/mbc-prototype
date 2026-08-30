@@ -1,6 +1,10 @@
 using Godot;
 using System;
 using System.Collections.Generic;
+using MbcPrototype.Combat;
+using MbcPrototype.TurnSystem;
+
+namespace MbcPrototype.Core;
 
 public enum AmmoType { Node, Bomb }
 

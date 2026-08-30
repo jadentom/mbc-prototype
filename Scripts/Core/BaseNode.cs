@@ -1,5 +1,8 @@
 using Godot;
 using System.Collections.Generic;
+using MbcPrototype.TurnSystem;
+
+namespace MbcPrototype.Core;
 
 public partial class BaseNode : StaticBody3D
 {
@@ -45,7 +48,7 @@ public partial class BaseNode : StaticBody3D
 		}
 
 		// Health Bar
-		var healthBarScene = GD.Load<PackedScene>("res://health_bar.tscn");
+		var healthBarScene = GD.Load<PackedScene>("res://Scenes/health_bar.tscn");
 		var healthBarInstance = healthBarScene.Instantiate<Control>();
 
 		_viewport = new SubViewport();
@@ -96,7 +99,7 @@ public partial class BaseNode : StaticBody3D
 		cable.Mesh = mesh;
 
 		ShaderMaterial mat = new ShaderMaterial();
-		mat.Shader = GD.Load<Shader>("res://CableShader.gdshader");
+		mat.Shader = GD.Load<Shader>("res://Shaders/CableShader.gdshader");
 
 		// This is the critical line that fixes the "middle-out" issue
 		mat.SetShaderParameter("cable_length", distance);
