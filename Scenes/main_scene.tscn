@@ -40,7 +40,7 @@ transform = Transform3D(1, 0, 0, 0, 0.70710677, 0.70710677, 0, -0.70710677, 0.70
 projection = 1
 size = 30.0
 
-[node name="GameManager" type="Node" parent="." node_paths=PackedStringArray("MainCamera", "PowerBar", "NodeIcon", "BombIcon", "SelectorBox", "TurnLabel", "DefeatLabel")]
+[node name="GameManager" type="Node" parent="." node_paths=PackedStringArray("MainCamera", "PowerBar", "NodeIcon", "BombIcon", "SelectorBox", "TurnLabel", "DefeatLabel", "VictoryLabel", "RestartLabel")]
 script = ExtResource("1_0f027")
 MainCamera = NodePath("../Camera3D")
 PowerBar = NodePath("../UI/FireStrengthBar")
@@ -49,6 +49,8 @@ BombIcon = NodePath("../UI/HBoxContainer/BombIcon")
 SelectorBox = NodePath("../UI/Selector")
 TurnLabel = NodePath("../UI/TurnLabel")
 DefeatLabel = NodePath("../UI/DefeatLabel")
+VictoryLabel = NodePath("../UI/VictoryLabel")
+RestartLabel = NodePath("../UI/RestartLabel")
 ProjectileScene = ExtResource("2_gyfs4")
 BombScene = ExtResource("3_d5x1h")
 
@@ -71,7 +73,7 @@ show_percentage = false
 [node name="Label" type="Label" parent="UI"]
 offset_right = 40.0
 offset_bottom = 23.0
-text = "Arrow keys or WAD to launch. Q/E to select ammo. Click to select node. Move mouse to screen edge to pan. Click minimap to jump"
+text = "Destroy the enemy's root node to win. Arrow keys or WAD to launch. Q/E to select ammo. Click to select node. Move mouse to screen edge to pan. Click minimap to jump."
 
 [node name="Selector" type="ColorRect" parent="UI"]
 anchors_preset = 2
@@ -105,13 +107,13 @@ stretch_mode = 2
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -160.0
+offset_left = -280.0
 offset_top = 8.0
 offset_right = -8.0
 offset_bottom = 40.0
 grow_horizontal = 0
 theme_override_font_sizes/font_size = 24
-text = "Turn: 1"
+text = "Turn 1 — your move"
 horizontal_alignment = 2
 
 [node name="DefeatLabel" type="Label" parent="UI"]
@@ -129,6 +131,43 @@ grow_vertical = 2
 theme_override_colors/font_color = Color(1, 0.2, 0.2, 1)
 theme_override_font_sizes/font_size = 56
 text = "DEFEAT"
+horizontal_alignment = 1
+vertical_alignment = 1
+visible = false
+
+[node name="VictoryLabel" type="Label" parent="UI"]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -150.0
+offset_top = -40.0
+offset_right = 150.0
+offset_bottom = 40.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.35, 1, 0.35, 1)
+theme_override_font_sizes/font_size = 56
+text = "VICTORY"
+horizontal_alignment = 1
+vertical_alignment = 1
+visible = false
+
+[node name="RestartLabel" type="Label" parent="UI"]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_top = 40.0
+offset_right = 200.0
+offset_bottom = 72.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_font_sizes/font_size = 20
+text = "Click or press any key to play again"
 horizontal_alignment = 1
 vertical_alignment = 1
 visible = false

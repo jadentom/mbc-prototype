@@ -34,12 +34,18 @@ public partial class Projectile : CharacterBody3D
 		var newBase = BaseScene.Instantiate<BaseNode>();
 		newBase.Position = GlobalPosition; 
 
-		// Only link into the chain while the creator is still alive.
+		// Only link into the chain while the creator is still alive. The new node
+		// joins the creator's chain (so it belongs to the same combatant and keeps
+		// that combatant alive).
 		if (IsInstanceValid(CreatorNode) && !CreatorNode.IsDestroyed)
 		{
 			newBase.ParentBase = CreatorNode;
+			newBase.OwnerChain = CreatorNode.OwnerChain;
 			CreatorNode.Children.Add(newBase);
 		}
+		// A node whose creator died while the shot was in flight has no chain to
+		// join: it spawns unowned, so it neither belongs to a combatant nor keeps
+		// a defeated chain alive (destroying a chain's root is that chain's loss).
 		
 		GetTree().Root.AddChild(newBase);
 

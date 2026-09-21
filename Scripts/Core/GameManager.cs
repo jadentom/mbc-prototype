@@ -2,11 +2,10 @@ using Godot;
 using System;
 using System.Collections.Generic;
 using MbcPrototype.Combat;
+using MbcPrototype.Enemies;
 using MbcPrototype.TurnSystem;
 
 namespace MbcPrototype.Core;
-
-public enum AmmoType { Node, Bomb }
 
 public partial class GameManager : Node
 {
@@ -28,6 +27,20 @@ public partial class GameManager : Node
 	[ExportGroup("Camera Settings")]
 	[Export] public float CameraSmoothTime = 0.5f;
 
+	[ExportGroup("Enemy")]
+	/// <summary>How far right of the player's starting node the enemy chain spawns, in screen widths (1 screen = the camera's visible width).</summary>
+	[Export] public float EnemyStartScreensRight = 2.0f;
+	/// <summary>Seconds the enemy spends aiming before it releases its shot.</summary>
+	[Export] public float EnemyThinkTime = 1.0f;
+	/// <summary>Half-angle of the enemy's random aim cone, in degrees (180 = any direction).</summary>
+	[Export] public float EnemyAimSpreadDegrees = 25.0f;
+	/// <summary>Lowest launch power the enemy will pick, 0..1 of the force range.</summary>
+	[Export(PropertyHint.Range, "0,1")] public float EnemyMinPower = 0.3f;
+	/// <summary>Highest launch power the enemy will pick, 0..1 of the force range.</summary>
+	[Export(PropertyHint.Range, "0,1")] public float EnemyMaxPower = 0.9f;
+	/// <summary>Center the camera on whichever combatant is acting, so the enemy's move (it starts two screens away) is visible.</summary>
+	[Export] public bool CenterCameraOnActingCombatant = true;
+
 	[ExportGroup("Camera Panning")]
 	[Export] public float PanSpeed = 60.0f;
 	[Export] public int PanEdgeMargin = 48;
@@ -46,6 +59,7 @@ public partial class GameManager : Node
 	[Export] public Color MinimapViewRectColor = new Color(1, 1, 1, 0.4f);
 	[Export] public Vector2 MinimapMarkerSize = new Vector2(3, 3);
 	[Export] public Color MinimapNodeColor = new Color(0, 0, 0, 0.9f);
+	[Export] public Color MinimapEnemyNodeColor = new Color(0.9f, 0.1f, 0.1f, 0.95f);
 	[Export] public Color MinimapSelectedNodeColor = new Color(1, 1, 0, 1);
 	[Export] public Color MinimapLineColor = new Color(0, 0, 0, 0.7f);
 	[Export] public float MinimapLineWidth = 1.0f;
@@ -56,6 +70,8 @@ public partial class GameManager : Node
 	[Export] public ColorRect SelectorBox;
 	[Export] public Label TurnLabel;
 	[Export] public Label DefeatLabel;
+	[Export] public Label VictoryLabel;
+	[Export] public Label RestartLabel;
 
 	[ExportGroup("Ammo Prefabs")]
 	[Export] public PackedScene ProjectileScene; // TODO: Change this to an interface; this is specifically a deploying node projectile
@@ -63,7 +79,24 @@ public partial class GameManager : Node
 
 	public BaseNode SelectedNode;
 
-	/// <summary>Current player turn number. Starts at 1.</summary>
+	/// <summary>The combatant whose turn it currently is (null before the match starts).</summary>
+	public Combatant ActiveCombatant { get; private set; }
+
+	/// <summary>Every combatant in the match, in turn order. Read by the AI to find its targets.</summary>
+	public IReadOnlyList<Combatant> Combatants => _combatants;
+
+	/// <summary>True once the match has been won or lost; input restarts the scene.</summary>
+	public bool IsGameOver { get; private set; } = false;
+
+	/// <summary>
+	/// Container that spawned chain nodes are parented under. A combatant may
+	/// spawn its root while the GameManager is still being readied, and neither
+	/// the tree root nor the scene root accepts children at that point ("parent
+	/// node is busy setting up children"); a node's own children never are.
+	/// </summary>
+	public Node3D NodeContainer { get; private set; }
+
+	/// <summary>Current round number. Starts at 1 and advances when the rotation wraps around.</summary>
 	public int CurrentTurn { get; private set; } = 1;
 
 	/// <summary>True while the player may aim / charge / select nodes / fire.</summary>
@@ -112,6 +145,15 @@ public partial class GameManager : Node
 	// TurnEvents that must finish before the current turn's resolution completes.
 	private readonly List<TurnEvent> _pendingTurnEvents = new List<TurnEvent>();
 
+	// The combatants taking turns, in rotation order, and the slot acting now.
+	private readonly List<Combatant> _combatants = new List<Combatant>();
+	private int _activeIndex = -1;
+	private PlayerCombatant _playerCombatant;
+	private EnemyCombatant _enemyCombatant;
+
+	// Guards against queueing the scene reload twice.
+	private bool _restartRequested = false;
+
 	public override void _Ready()
 	{
 		Instance = this;
@@ -131,6 +173,8 @@ public partial class GameManager : Node
 		UpdateSelectedAmmo();
 		if (PowerBar != null) PowerBar.Visible = false;
 		if (DefeatLabel != null) DefeatLabel.Visible = false;
+		if (VictoryLabel != null) VictoryLabel.Visible = false;
+		if (RestartLabel != null) RestartLabel.Visible = false;
 		UpdateTurnLabel();
 
 		// Track whether the OS cursor is inside the game window so edge
@@ -139,6 +183,92 @@ public partial class GameManager : Node
 		window.MouseEntered += () => _mouseInsideWindow = true;
 		window.MouseExited += () => _mouseInsideWindow = false;
 		window.SizeChanged += UpdateMinimapLayout; // Keep the minimap sized to the window.
+
+		// Build the match and hand the first turn to the first combatant.
+		NodeContainer = new Node3D { Name = "Nodes" };
+		AddChild(NodeContainer);
+		CreateCombatants();
+
+		// The first turn starts once the whole scene has finished setting up: the
+		// starting node's _Ready (which builds its highlight ring and health bar)
+		// has not run yet at this point, so it could not be selected.
+		GetTree().CreateTimer(0.0f).Timeout += StartFirstTurn;
+	}
+
+	// ------------------------------------------------------------------
+	// Combatants
+	// ------------------------------------------------------------------
+
+	/// <summary>
+	/// Builds the match: the player's chain (the BaseNode already placed in the
+	/// scene) plus one enemy chain spawned <see cref="EnemyStartScreensRight"/>
+	/// screens to the right of it.
+	///
+	/// This is the single place opponents are declared. Adding a second enemy —
+	/// or a totally different kind of combatant, since the rotation only ever
+	/// talks to <see cref="Combatant"/> — means creating it here and adding it
+	/// to _combatants, on a team other than the player's.
+	/// </summary>
+	private void CreateCombatants()
+	{
+		// --- Player (team 0) ---
+		_playerCombatant = new PlayerCombatant
+		{
+			Name = "PlayerCombatant",
+			DisplayName = "You",
+			Team = 0,
+			MinimapColor = MinimapNodeColor,
+		};
+		AddChild(_playerCombatant);
+		_combatants.Add(_playerCombatant);
+
+		var startBase = GetTree().Root.FindChild("BaseNode", true, false) as BaseNode;
+		if (startBase != null)
+		{
+			// Adopted before the node's _Ready runs (GameManager is ready first, so
+			// its _Ready can register the node with this chain).
+			_playerCombatant.AttachRoot(startBase);
+		}
+		else
+		{
+			GD.PushWarning("No starting BaseNode found in the scene — spawning the player's root at the origin.");
+			_playerCombatant.SpawnRoot(Vector3.Zero);
+		}
+
+		// --- Enemy (team 1) ---
+		_enemyCombatant = new EnemyCombatant
+		{
+			Name = "EnemyCombatant",
+			DisplayName = "Enemy",
+			Team = 1,
+			MinimapColor = MinimapEnemyNodeColor,
+			ThinkTime = EnemyThinkTime,
+			AimSpreadDegrees = EnemyAimSpreadDegrees,
+			MinPowerPercent = EnemyMinPower,
+			MaxPowerPercent = EnemyMaxPower,
+		};
+		AddChild(_enemyCombatant);
+		_combatants.Add(_enemyCombatant);
+		BaseNode enemyRoot = _enemyCombatant.SpawnRoot(GetEnemyStartPosition());
+
+		GD.Print($"[Match] {_combatants.Count} combatants ready. Enemy root at {enemyRoot?.GlobalPosition} "
+			+ $"({EnemyStartScreensRight} screens right of the player's root).");
+	}
+
+	/// <summary>
+	/// The enemy's starting spot: <see cref="EnemyStartScreensRight"/> screen
+	/// widths to the right of the player's root, on the same Z.
+	/// </summary>
+	private Vector3 GetEnemyStartPosition()
+	{
+		Vector3 origin = Vector3.Zero;
+		if (_playerCombatant?.RootNode != null && IsInstanceValid(_playerCombatant.RootNode))
+		{
+			origin = _playerCombatant.RootNode.GlobalPosition;
+		}
+
+		float screenWidth = (MainCamera != null ? MainCamera.Size : 30f) * GetViewportAspect();
+		return new Vector3(origin.X + screenWidth * EnemyStartScreensRight, 0f, origin.Z);
 	}
 
 	private void UpdateSelectedAmmo()
@@ -181,6 +311,9 @@ public partial class GameManager : Node
 		// No selecting while the turn's events are still resolving.
 		if (!IsPlayerTurn) return;
 		if (node == null || !IsInstanceValid(node) || node.IsDestroyed) return;
+		// Only the player's own chain is controllable — enemy nodes are never
+		// selectable, so a click can't hijack the opponent's chain.
+		if (node.OwnerChain != _playerCombatant) return;
 
 		// The previous selection may have been destroyed; only touch it
 		// while it is still a valid instance.
@@ -241,9 +374,41 @@ public partial class GameManager : Node
 			UpdateSelectedAmmo();
 		}
 
-		_aimIndicator.GlobalPosition = SelectedNode.GlobalPosition + Vector3.Up * 1.0f;
-		_aimIndicator.Rotation = new Vector3(0, _currentAimAngle, 0);
+		ShowAimPreview(SelectedNode, _currentAimAngle, _currentPowerPercent);
+	}
+
+	/// <summary>
+	/// Puts the shared aim arrow on <paramref name="origin"/> at the given aim
+	/// angle and power level. The player's aiming and every AI combatant's
+	/// aiming both go through here, so all shots are previewed identically.
+	/// </summary>
+	/// <param name="origin">Node the shot would be launched from.</param>
+	/// <param name="aimAngleRadians">Aim angle, in the aim-indicator convention.</param>
+	/// <param name="powerPercent">Charge level, 0..1.</param>
+	/// <param name="showPowerMeter">Also drive the shared power bar (used during an AI turn).</param>
+	public void ShowAimPreview(BaseNode origin, float aimAngleRadians, float powerPercent, bool showPowerMeter = false)
+	{
+		if (_aimIndicator == null) return;
+		if (origin == null || !IsInstanceValid(origin) || origin.IsDestroyed) return;
+
+		float power = Mathf.Clamp(powerPercent, 0f, 1f);
+
+		_aimIndicator.Visible = true;
+		_aimIndicator.Scale = new Vector3(1, 1, 1 + (power * 2f));
+		_aimIndicator.GlobalPosition = origin.GlobalPosition + Vector3.Up * 1.0f;
+		_aimIndicator.Rotation = new Vector3(0, aimAngleRadians, 0);
 		_aimIndicator.GlobalPosition += _aimIndicator.GlobalTransform.Basis.Z * 1.5f;
+
+		if (showPowerMeter && PowerBar != null)
+		{
+			PowerBar.Visible = true;
+			PowerBar.Value = power;
+		}
+	}
+
+	private void HideAimIndicator()
+	{
+		if (_aimIndicator != null) _aimIndicator.Visible = false;
 	}
 
 	private void HandleFiringLogic(float delta)
@@ -281,8 +446,7 @@ public partial class GameManager : Node
 		if (_isCharging && Input.IsActionJustReleased("fire_shot"))
 		{
 			_isChargingUp = true;
-			float finalForce = Mathf.Lerp(MinLaunchForce, MaxLaunchForce, _currentPowerPercent);
-			Fire(finalForce);
+			Fire(_currentPowerPercent);
 			
 			// Reset
 			_isCharging = false;
@@ -292,39 +456,14 @@ public partial class GameManager : Node
 		}
 	}
 
-	private void Fire(float force)
+	/// <summary>
+	/// Fires the currently selected ammo along the player's current aim. Uses
+	/// the exact same launch path as every AI combatant.
+	/// </summary>
+	/// <param name="powerPercent">Charge level, 0..1, mapped onto the launch force range.</param>
+	private void Fire(float powerPercent)
 	{
-		// Choose which scene to instantiate
-		PackedScene sceneToSpawn = (_currentAmmo == AmmoType.Node) ? ProjectileScene : BombScene;
-		
-		var instance = sceneToSpawn.Instantiate<Node3D>();
-		instance.GlobalPosition = SelectedNode.GlobalPosition + Vector3.Up * 2.0f;
-		
-		Vector3 launchDirection = _aimIndicator.GlobalTransform.Basis.Z.Normalized();
-		Vector3 velocity = (launchDirection * force) + (Vector3.Up * UpwardBias);
-
-		// The projectile (and everything it triggers — landing, damage,
-		// destruction cascades, etc.) must fully resolve before control
-		// returns to the player.
-		TurnEvent turnEvent = new TurnEvent(_currentAmmo == AmmoType.Node ? "Node projectile" : "Bomb");
-
-		// TODO: Switch this to inheritance and use an interface
-		if (instance is Projectile p)
-		{
-			p.Velocity = velocity;
-			p.CreatorNode = SelectedNode;
-			p.TurnEvent = turnEvent;
-		}
-		else if (instance is Bomb b)
-		{
-			b.Velocity = velocity;
-			b.TurnEvent = turnEvent;
-		}
-		
-		GetTree().Root.AddChild(instance);
-
-		// Committing the turn: locks control until every event resolves.
-		RegisterTurnEvent(turnEvent);
+		AmmoLauncher.Launch(_currentAmmo, SelectedNode, _currentAimAngle, powerPercent, null);
 	}
 
 	// ------------------------------------------------------------------
@@ -372,90 +511,216 @@ public partial class GameManager : Node
 	}
 
 	/// <summary>
-	/// Every pending event has finished: advance the turn counter and hand
-	/// control back to the player. Control stays on the last selected node
-	/// when it survived the turn; if it was destroyed it reverts to the
-	/// highest remaining node in the chain, or the game ends in defeat if
-	/// no nodes remain.
+	/// Every pending event has finished: the acting combatant's turn is over.
+	/// The match is checked for a winner, and otherwise the turn passes to the
+	/// next combatant that can still act.
 	/// </summary>
 	private void CompleteTurn()
 	{
 		IsResolvingTurn = false;
+		ActiveCombatant?.EndTurn();
 
-		BaseNode target;
+		GD.Print($"[Turn {CurrentTurn}] Resolution complete.");
 
-		// Note: a destroyed node may still be a "valid" instance at this
-		// point (QueueFree removes it at the end of the frame), so check
-		// the IsDestroyed flag rather than IsInstanceValid alone.
-		bool selectionSurvived = SelectedNode != null
-			&& IsInstanceValid(SelectedNode)
-			&& !SelectedNode.IsDestroyed;
+		// A chain whose root was destroyed cascades through every child, so a
+		// combatant with no root left loses the match for its team.
+		if (EvaluateGameOver()) return;
 
-		if (selectionSurvived)
-		{
-			target = SelectedNode;
-		}
-		else
-		{
-			target = FindHighestRemainingNode();
-			if (target == null)
-			{
-				Defeat();
-				return;
-			}
-		}
-
-		CurrentTurn++;
-		UpdateTurnLabel();
-
-		GD.Print($"[Turn {CurrentTurn}] Resolution complete — player turn begins.");
-		IsPlayerTurn = true;
-		SelectNode(target);
-	}
-
-	private void Defeat()
-	{
-		IsPlayerTurn = false;
-		SelectedNode = null;
-		if (_aimIndicator != null) _aimIndicator.Visible = false;
-		if (DefeatLabel != null) DefeatLabel.Visible = true;
-		GD.Print("DEFEAT: no nodes remain in the chain.");
+		AdvanceTurn();
 	}
 
 	/// <summary>
-	/// Hands control back to the topmost surviving node of the chain.
+	/// Ends the active turn for a combatant that spent its whole turn without
+	/// registering a single TurnEvent (for example a shot that could not be
+	/// launched). Without this the rotation would wait forever for events that
+	/// are never coming. Does nothing while events are still resolving.
+	/// </summary>
+	public void EndIdleTurn()
+	{
+		if (IsResolvingTurn || IsGameOver) return;
+		CompleteTurn();
+	}
+
+	/// <summary>
+	/// Hands the first turn of the match to the first combatant in the rotation.
+	/// </summary>
+	private void StartFirstTurn()
+	{
+		if (_combatants.Count == 0) return;
+
+		_activeIndex = 0;
+		CurrentTurn = 1;
+		StartTurn(_combatants[_activeIndex]);
+	}
+
+	/// <summary>
+	/// Begins <paramref name="combatant"/>'s turn: a player-controlled combatant
+	/// gets control back (on its last selected node when that node survived, or
+	/// on the top of its chain otherwise), an AI combatant starts acting.
+	/// </summary>
+	private void StartTurn(Combatant combatant)
+	{
+		ActiveCombatant = combatant;
+		if (combatant == null) return;
+
+		if (combatant.IsPlayerControlled)
+		{
+			IsPlayerTurn = true;
+
+			// Note: a destroyed node may still be a "valid" instance at this
+			// point (QueueFree removes it at the end of the frame), so check
+			// the IsDestroyed flag rather than IsInstanceValid alone.
+			bool selectionSurvived = SelectedNode != null
+				&& IsInstanceValid(SelectedNode)
+				&& !SelectedNode.IsDestroyed
+				&& SelectedNode.OwnerChain == combatant;
+
+			BaseNode target = selectionSurvived ? SelectedNode : _playerCombatant.FindHighestRemainingNode();
+			SelectNode(target);
+			GD.Print($"[Turn {CurrentTurn}] {combatant.DisplayName}: move.");
+		}
+		else
+		{
+			// No input for this combatant — it acts on its own from here.
+			IsPlayerTurn = false;
+			HideAimIndicator();
+
+			// An enemy may be well off-screen (it starts two screens away), so
+			// follow whoever is acting; the player's own turn centers the camera
+			// back on their selection through SelectNode().
+			if (CenterCameraOnActingCombatant
+				&& combatant is NodeChainCombatant chain
+				&& chain.ActionNode != null)
+			{
+				CenterCameraOn(chain.ActionNode.GlobalPosition);
+			}
+
+			GD.Print($"[Turn {CurrentTurn}] {combatant.DisplayName}: move.");
+			combatant.BeginTurn();
+		}
+
+		UpdateTurnLabel();
+	}
+
+	/// <summary>
+	/// Passes the turn to the next combatant that can still act, skipping
+	/// defeated ones, and counts a round each time the rotation wraps around.
+	/// </summary>
+	private void AdvanceTurn()
+	{
+		int count = _combatants.Count;
+		if (count == 0) return;
+
+		bool roundCounted = false;
+		for (int step = 1; step <= count; step++)
+		{
+			int next = (_activeIndex + step) % count;
+
+			// Wrapped past the end of the rotation: one full round has passed.
+			if (next <= _activeIndex && !roundCounted)
+			{
+				CurrentTurn++;
+				roundCounted = true;
+			}
+
+			if (_combatants[next].IsDefeated) continue;
+
+			_activeIndex = next;
+			StartTurn(_combatants[next]);
+			return;
+		}
+
+		// Every combatant is defeated; EvaluateGameOver() should have ended the
+		// match before this could happen.
+	}
+
+	/// <summary>
+	/// Ends the match once a whole team has no combatant left that can act:
+	/// defeat when the player's team is gone, victory when every enemy is
+	/// (destroying the enemy chain's root takes its whole chain with it).
+	/// Returns true when the match ended.
+	/// </summary>
+	private bool EvaluateGameOver()
+	{
+		if (_playerCombatant == null || _combatants.Count == 0) return false;
+
+		int playerTeam = _playerCombatant.Team;
+		bool playerAlive = false;
+		bool enemiesAlive = false;
+
+		foreach (Combatant combatant in _combatants)
+		{
+			if (combatant.IsDefeated) continue;
+			if (combatant.Team == playerTeam) playerAlive = true;
+			else enemiesAlive = true;
+		}
+
+		if (playerAlive && enemiesAlive) return false;
+
+		EndGame(playerAlive && !enemiesAlive);
+		return true;
+	}
+
+	/// <summary>
+	/// Shows the outcome overlay and stops the rotation. Any key or click from
+	/// here on restarts the match (see <see cref="_UnhandledInput"/>).
+	/// </summary>
+	/// <param name="playerWon">True for the victory screen, false for defeat.</param>
+	private void EndGame(bool playerWon)
+	{
+		IsGameOver = true;
+		IsPlayerTurn = false;
+		IsResolvingTurn = false;
+		SelectedNode = null;
+		HideAimIndicator();
+		if (PowerBar != null) PowerBar.Visible = false;
+		if (RestartLabel != null) RestartLabel.Visible = true;
+
+		if (playerWon)
+		{
+			if (VictoryLabel != null) VictoryLabel.Visible = true;
+			GD.Print("VICTORY: every enemy chain has been destroyed.");
+		}
+		else
+		{
+			if (DefeatLabel != null) DefeatLabel.Visible = true;
+			GD.Print("DEFEAT: no nodes remain in the chain.");
+		}
+
+		UpdateTurnLabel();
+	}
+
+	/// <summary>
+	/// Any key press or click after the match has ended restarts it by reloading
+	/// the scene. The reload is deferred by a frame so it never runs from inside
+	/// a node that the reload is about to free.
+	/// </summary>
+	public override void _UnhandledInput(InputEvent @event)
+	{
+		if (!IsGameOver || _restartRequested) return;
+
+		bool pressed = (@event is InputEventKey key && key.Pressed && !key.Echo)
+			|| (@event is InputEventMouseButton mouseButton && mouseButton.Pressed);
+		if (!pressed) return;
+
+		_restartRequested = true;
+		GD.Print("Restarting the match.");
+		GetTree().CreateTimer(0.0f).Timeout += () => GetTree().ReloadCurrentScene();
+	}
+
+	/// <summary>
+	/// Hands control back to the topmost surviving node of the player's chain.
 	/// Called after destruction so control never gets stuck on a dead node.
 	/// </summary>
 	private void RevertControlToHighestNode()
 	{
-		BaseNode highest = FindHighestRemainingNode();
+		BaseNode highest = _playerCombatant?.FindHighestRemainingNode();
 		if (highest == null)
 		{
-			Defeat();
+			EndGame(false);
 			return;
 		}
 		SelectNode(highest);
-	}
-
-	/// <summary>
-	/// Returns the topmost surviving node of the chain — the root, i.e. a
-	/// node with no valid parent. Returns null when no nodes remain.
-	/// </summary>
-	private BaseNode FindHighestRemainingNode()
-	{
-		foreach (BaseNode node in _allNodes)
-		{
-			if (node == null || !IsInstanceValid(node) || node.IsDestroyed) continue;
-
-			bool hasValidParent = node.ParentBase != null
-				&& IsInstanceValid(node.ParentBase)
-				&& !node.ParentBase.IsDestroyed;
-			if (!hasValidParent)
-			{
-				return node;
-			}
-		}
-		return null;
 	}
 
 	// ------------------------------------------------------------------
@@ -475,12 +740,33 @@ public partial class GameManager : Node
 		_allNodes.Remove(node);
 	}
 
+	/// <summary>Minimap color for a node: the selection stands out, otherwise nodes use their owner's color.</summary>
+	private Color GetNodeMinimapColor(BaseNode node)
+	{
+		if (node == SelectedNode) return MinimapSelectedNodeColor;
+		if (node.OwnerChain != null && IsInstanceValid(node.OwnerChain)) return node.OwnerChain.MinimapColor;
+		return MinimapNodeColor;
+	}
+
+	/// <summary>Shows the round number and whose move it is.</summary>
 	private void UpdateTurnLabel()
 	{
-		if (TurnLabel != null)
+		if (TurnLabel == null) return;
+
+		if (IsGameOver)
 		{
-			TurnLabel.Text = "Turn: " + CurrentTurn;
+			TurnLabel.Text = "Game over";
+			return;
 		}
+
+		if (ActiveCombatant == null)
+		{
+			TurnLabel.Text = $"Turn {CurrentTurn}";
+			return;
+		}
+
+		string whose = ActiveCombatant.IsPlayerControlled ? "your move" : $"{ActiveCombatant.DisplayName}'s move";
+		TurnLabel.Text = $"Turn {CurrentTurn} — {whose}";
 	}
 
 	private void CenterCameraOn(Vector3 targetPosition)
@@ -746,7 +1032,7 @@ public partial class GameManager : Node
 				_minimapMarkers[node] = marker;
 			}
 
-			marker.Color = (node == SelectedNode) ? MinimapSelectedNodeColor : MinimapNodeColor;
+			marker.Color = GetNodeMinimapColor(node);
 			Vector2 pos = WorldToMinimap(new Vector2(node.GlobalPosition.X, node.GlobalPosition.Z));
 			marker.Position = pos - marker.Size * 0.5f;
 		}

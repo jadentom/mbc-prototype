@@ -11,6 +11,15 @@ public partial class BaseNode : StaticBody3D
 	public BaseNode ParentBase;
 	public List<BaseNode> Children = new List<BaseNode>();
 
+	/// <summary>
+	/// The combatant whose chain this node belongs to. Set before the node
+	/// enters the tree — by the projectile that deployed it, or by the
+	/// combatant spawning its root — so _Ready can register it with that chain.
+	/// Null for a node that never made it into a chain (see Projectile.Deploy),
+	/// which belongs to nobody and keeps nobody alive.
+	/// </summary>
+	public NodeChainCombatant OwnerChain { get; set; }
+
 	private MeshInstance3D _highlight;
 	private ProgressBar _healthBar;
 	private SubViewport _viewport;
@@ -69,6 +78,9 @@ public partial class BaseNode : StaticBody3D
 		_healthBar = healthBarInstance.GetNode<ProgressBar>("ProgressBar");
 		UpdateHealthBar();
 
+		// The owning chain (which decides this combatant's defeat) and the global
+		// registry (which drives the minimap) are tracked separately.
+		OwnerChain?.RegisterNode(this);
 		GameManager.Instance?.RegisterNode(this);
 	}
 
@@ -82,6 +94,12 @@ public partial class BaseNode : StaticBody3D
 			_destructionEvent = null;
 		}
 
+		// The chain may already be gone when a scene teardown frees everything at
+		// once, so only unregister from an owner that is still alive.
+		if (OwnerChain != null && IsInstanceValid(OwnerChain))
+		{
+			OwnerChain.UnregisterNode(this);
+		}
 		GameManager.Instance?.UnregisterNode(this);
 		base._ExitTree();
 	}
@@ -123,7 +141,14 @@ public partial class BaseNode : StaticBody3D
 		}
 	}
 
-	public void SetHighlight(bool state) => _highlight.Visible = state;
+	/// <summary>
+	/// Toggles the selection ring. Safe before this node's _Ready has built the
+	/// ring (selection can happen in the same frame the node is created).
+	/// </summary>
+	public void SetHighlight(bool state)
+	{
+		if (_highlight != null) _highlight.Visible = state;
+	}
 
 	public void TakeDamage(int amount)
 	{
