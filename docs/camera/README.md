@@ -56,11 +56,19 @@ Features:
 
 - translucent white rectangle = the main camera's view footprint
   (`UpdateMinimapViewIndicator()`);
+- flat pool markers = one per purple pool, in a steady colour that never pulses
+  (`UpdateMinimapPoolMarkers()`, drawn under the cables and the dots). The pools'
+  *3D* geometry is on `PurplePool.WorldRenderLayer`, which this camera has cleared
+  from its `cull_mask`: a field of pools pulsing out of phase is noise on a map.
+  Marker size is the pool's true size on the map, floored at
+  `MinimapPoolMarkerSize` (3 px) so it can be seen at all;
 - black dots = nodes, yellow dot = selected node (`UpdateMinimapMarkers()`,
-  reconciled against `_allNodes` every frame);
+  reconciled against `_allNodes` every frame), sized by `MinimapMarkerSize`
+  (6×6 px — the map is 475 world units across a widget a quarter of the window's
+  shorter side, so a small dot cannot be found at a glance);
 - plain lines connecting each child dot to its parent dot
   (`UpdateMinimapLines()`, drawn under the dots on a dedicated `Line2D` layer
-  — no directionality);
+  — no directionality), `MinimapLineWidth` wide (2 px, matched to the dots);
 - left-click centers the camera on that world spot (`OnMinimapGuiInput`).
 
 ### Scaling seam

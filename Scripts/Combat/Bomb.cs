@@ -16,8 +16,9 @@ public partial class Bomb : CharacterBody3D
 	///
 	/// Before it had a blast at all, a bomb only ever damaged the node it
 	/// physically touched, so the area it could hurt was about one node wide
-	/// (nodes are 1-unit-wide cylinders). It started at twice that and was tuned
-	/// down to 1.5 after watching the ground marker in play; <see cref="OuterRadius"/>
+	/// (nodes were 1-unit-wide cylinders then, 2 units across since their radius
+	/// was doubled — see Scenes/base_node.tscn). It started at twice that and was
+	/// tuned down to 1.5 after watching the ground marker in play; <see cref="OuterRadius"/>
 	/// stayed at 3, so the half-damage donut is what got wider. These two radii are
 	/// also what <see cref="BlastVisual"/> draws and what its ground marker shows,
 	/// so they can be compared against the health bars after a shot.

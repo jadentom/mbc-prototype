@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using MbcPrototype.Combat;
 using MbcPrototype.Enemies;
 using MbcPrototype.TurnSystem;
+using MbcPrototype.World;
 
 namespace MbcPrototype.Core;
 
@@ -57,12 +58,29 @@ public partial class GameManager : Node
 	[Export(PropertyHint.Range, "0.05, 0.5")]
 	public float MinimapScreenFraction = 0.25f;
 	[Export] public Color MinimapViewRectColor = new Color(1, 1, 1, 0.4f);
-	[Export] public Vector2 MinimapMarkerSize = new Vector2(3, 3);
+	// Node dots are drawn this many minimap pixels square, centred on the node.
+	// Big enough to pick out at a glance: the whole map is 475 world units across
+	// a widget a quarter of the window's shorter side.
+	[Export] public Vector2 MinimapMarkerSize = new Vector2(6, 6);
 	[Export] public Color MinimapNodeColor = new Color(0, 0, 0, 0.9f);
 	[Export] public Color MinimapEnemyNodeColor = new Color(0.9f, 0.1f, 0.1f, 0.95f);
 	[Export] public Color MinimapSelectedNodeColor = new Color(1, 1, 0, 1);
 	[Export] public Color MinimapLineColor = new Color(0, 0, 0, 0.7f);
-	[Export] public float MinimapLineWidth = 1.0f;
+	// Chain cables on the minimap, in minimap pixels. Matched to the dots: a
+	// thinner line between 6-pixel markers reads as a gap rather than as a chain.
+	[Export] public float MinimapLineWidth = 2.0f;
+	/// <summary>
+	/// Colour the minimap draws pools in: the pool's lit colour, and constant.
+	/// The minimap is a map, not a window — a field of 60-odd squares pulsing out
+	/// of phase would be noise where the player wants to read positions.
+	/// </summary>
+	[Export] public Color MinimapPoolColor = PurplePool.LitColor;
+	/// <summary>
+	/// Smallest a pool marker may be drawn on the minimap, in minimap pixels. A
+	/// pool is 6 world units across a 475-unit map, which is barely one pixel on
+	/// the widget: without a floor the markers could not be seen at all.
+	/// </summary>
+	[Export] public float MinimapPoolMarkerSize = 3.0f;
 
 	[ExportGroup("UI References")]
 	[Export] public TextureRect NodeIcon;
@@ -77,7 +95,32 @@ public partial class GameManager : Node
 	[Export] public PackedScene ProjectileScene; // TODO: Change this to an interface; this is specifically a deploying node projectile
 	[Export] public PackedScene BombScene;
 
+	[ExportGroup("Pools")]
+	/// <summary>Scatter the fixed map of purple pools over the ground at match start.</summary>
+	[Export] public bool SpawnPools = true;
+	/// <summary>
+	/// Side of one pool, in world units: three node diameters. A node's radius is
+	/// 1.0 (see Scenes/base_node.tscn), so a diameter is 2.0 and a side is 6.0.
+	/// </summary>
+	[Export] public float PoolSide = 6.0f;
+	/// <summary>
+	/// Share of the map's ground the pools cover: 1/100 by default. The number of
+	/// pools follows from it (how many of them fit in that much ground), so the
+	/// map stays as sparse or as busy as this says.
+	/// </summary>
+	[Export(PropertyHint.Range, "0,0.5")] public float PoolCoverageFraction = 0.01f;
+
 	public BaseNode SelectedNode;
+
+	/// <summary>
+	/// The map's purple pools, or null when <see cref="SpawnPools"/> is off.
+	///
+	/// Nothing reads a pool yet: the pools are decoration. This is the hook the
+	/// future collision checks use — <c>Pools.PoolAt(position)</c> for a point and
+	/// <c>Pools.OverlappingPools(centre, radius, buffer)</c> for something with a
+	/// size.
+	/// </summary>
+	public PoolField Pools { get; private set; }
 
 	/// <summary>The combatant whose turn it currently is (null before the match starts).</summary>
 	public Combatant ActiveCombatant { get; private set; }
@@ -161,6 +204,12 @@ public partial class GameManager : Node
 	// Node markers on the minimap (BaseNode -> dot), reconciled every frame.
 	private readonly Dictionary<BaseNode, ColorRect> _minimapMarkers = new Dictionary<BaseNode, ColorRect>();
 
+	// Pool markers on the minimap, one per pool in field order. Flat squares in
+	// MinimapPoolColor: the pools' own 3D geometry is on PurplePool.WorldRenderLayer
+	// and excluded from the minimap camera, so what shows here does not pulse.
+	private readonly List<ColorRect> _minimapPoolMarkers = new List<ColorRect>();
+	private Node2D _minimapPoolLayer;
+
 	// Connection lines on the minimap (child node -> line to its parent),
 	// reconciled every frame. Drawn under the markers via a dedicated layer.
 	private readonly Dictionary<BaseNode, Line2D> _minimapLines = new Dictionary<BaseNode, Line2D>();
@@ -219,6 +268,10 @@ public partial class GameManager : Node
 		NodeContainer = new Node3D { Name = "Nodes" };
 		AddChild(NodeContainer);
 		CreateCombatants();
+
+		// After NodeContainer: the pool field parents itself under the spawn
+		// container, like everything else a match spawns.
+		CreatePools();
 
 		// The first turn starts once the whole scene has finished setting up: the
 		// starting node's _Ready (which builds its highlight ring and health bar)
@@ -305,6 +358,36 @@ public partial class GameManager : Node
 		return new Vector3(origin.X + screenWidth * EnemyStartScreensRight, 0f, origin.Z);
 	}
 
+	// ------------------------------------------------------------------
+	// Pools
+	// ------------------------------------------------------------------
+
+	/// <summary>
+	/// Scatters the map's purple pools over the ground. Nothing in the game reacts
+	/// to them yet — they are a decorative field with a query API for the collision
+	/// checks that will come later (see <see cref="Pools"/>).
+	///
+	/// Scattered over <see cref="GetMinimapWorldRect"/>: the region the minimap
+	/// already treats as the map. The ground itself is a 10000x10000 plane with no
+	/// real bounds (see docs/camera/README.md), and 1/100 of *that* would be some
+	/// 28000 pools, so "the ground" here is the map rather than the engine's plane.
+	/// When a real map size lands, this and the minimap move to it together.
+	/// </summary>
+	private void CreatePools()
+	{
+		if (!SpawnPools) return;
+
+		Pools = PoolField.Spawn(this, GetMinimapWorldRect(), PoolSide, PoolCoverageFraction);
+
+		// Pools are drawn on a layer of their own so the minimap camera can skip
+		// them and draw flat, steady-coloured markers instead (see CreateMinimap).
+		// The main camera has to be told to draw that layer.
+		if (MainCamera != null)
+		{
+			MainCamera.CullMask |= PurplePool.WorldRenderLayer;
+		}
+	}
+
 	private void UpdateSelectedAmmo()
 	{
 		if (SelectorBox == null) return;
@@ -372,6 +455,7 @@ public partial class GameManager : Node
 	{
 		HandleCameraPanning((float)delta);
 		UpdateMinimapViewIndicator();
+		UpdateMinimapPoolMarkers();
 		UpdateMinimapMarkers();
 		UpdateMinimapLines();
 
@@ -874,6 +958,11 @@ public partial class GameManager : Node
 		};
 		_minimapViewport.AddChild(_minimapCamera);
 		_minimapCamera.Current = true; // Make it the viewport's active camera.
+
+		// The pools' 3D geometry is left out of the minimap: their pulse would be
+		// noise on a map, and a 6-unit pool is barely a pixel here anyway. Flat
+		// markers in a steady colour are drawn instead (UpdateMinimapPoolMarkers).
+		_minimapCamera.CullMask &= ~PurplePool.WorldRenderLayer;
 		AddChild(_minimapViewport);
 
 		// 2. A thin frame behind the minimap so it stands out on the ground.
@@ -906,12 +995,18 @@ public partial class GameManager : Node
 		};
 		_minimapRect.AddChild(_minimapViewIndicator);
 
-		// 5. Layer for parent->child connection lines. Added before any
+		// 5. Layer for the pool markers, added before the layers below so pools sit
+		// underneath the cables and the node dots: a node standing in a pool has to
+		// stay readable.
+		_minimapPoolLayer = new Node2D { Name = "PoolMarkers" };
+		_minimapRect.AddChild(_minimapPoolLayer);
+
+		// 6. Layer for parent->child connection lines. Added before any
 		// marker dots exist, so lines always draw underneath the dots.
 		_minimapLineLayer = new Node2D { Name = "ConnectionLines" };
 		_minimapRect.AddChild(_minimapLineLayer);
 
-		// 6. Clicking the minimap moves the camera to that spot.
+		// 7. Clicking the minimap moves the camera to that spot.
 		_minimapRect.GuiInput += OnMinimapGuiInput;
 
 		// Size the widget (and viewport) for the current window.
@@ -1089,6 +1184,49 @@ public partial class GameManager : Node
 			{
 				_minimapMarkers.Remove(key);
 			}
+		}
+	}
+
+	/// <summary>
+	/// Reconciles the minimap's pool markers: one flat square per pool, in
+	/// <see cref="MinimapPoolColor"/> and never pulsing.
+	///
+	/// The pools' own geometry is excluded from the minimap camera (see
+	/// CreateMinimap), so these markers are the only pools the minimap shows — a
+	/// steady version of the same purple, which is what a map wants. They are
+	/// reconciled every frame like the node markers, which is also what keeps them
+	/// right when the window (and so the minimap) is resized.
+	/// </summary>
+	private void UpdateMinimapPoolMarkers()
+	{
+		if (_minimapRect == null || _minimapPoolLayer == null || Pools == null) return;
+		IReadOnlyList<PurplePool> pools = Pools.Pools;
+		if (pools.Count == 0) return;
+
+		// World units to minimap pixels. The widget and the world rect are both
+		// square, so one factor covers X and Z.
+		float scale = _minimapRect.Size.X / Mathf.Max(0.01f, GetMinimapWorldRect().Size.X);
+
+		for (int i = 0; i < pools.Count; i++)
+		{
+			if (_minimapPoolMarkers.Count <= i)
+			{
+				var marker = new ColorRect
+				{
+					Name = $"PoolMarker{i}",
+					Color = MinimapPoolColor,
+					MouseFilter = Control.MouseFilterEnum.Ignore,
+				};
+				_minimapPoolLayer.AddChild(marker);
+				_minimapPoolMarkers.Add(marker);
+			}
+
+			ColorRect dot = _minimapPoolMarkers[i];
+			// A pool's true size on the minimap, floored so it can be seen at all.
+			float side = Mathf.Max(pools[i].Side * scale, MinimapPoolMarkerSize);
+			dot.Size = new Vector2(side, side);
+			Vector2 pos = WorldToMinimap(new Vector2(pools[i].GlobalPosition.X, pools[i].GlobalPosition.Z));
+			dot.Position = pos - dot.Size * 0.5f;
 		}
 	}
 

@@ -82,6 +82,8 @@ not stored in the scene. See [docs/camera](docs/camera/README.md).
 | `Scripts/Combat/Bomb.cs` | Ammo: a ballistic body that detonates on contact and damages every `BaseNode` in its blast radii (see *Bomb blast*), resolving a `TurnEvent`. |
 | `Scripts/Combat/BlastVisual.cs` | A blast's visuals: expanding translucent spheres over the damage radii, plus a ground marker (disc + a ring per radius) showing where they landed. Built in code, spawned by `Bomb`. |
 | `Scripts/TurnSystem/TurnEvent.cs` | One unit of turn resolution; the turn ends when all pending events resolve. |
+| `Scripts/World/PoolField.cs` | The map's purple pools: a fixed, grid-free scatter over the ground, one per-frame loop that pulses them all, and the pool queries future collision checks will use. |
+| `Scripts/World/PurplePool.cs` | One purple pool: a solid rounded square of energy with a rim of dead grass around it, pulsing between a resting violet and a bright glow. Knows its own footprint (`ContainsXZ`/`OverlapsXZ`). |
 | `Shaders/CableShader.gdshader` | Visual cable between chained nodes. |
 
 ## Combatants & turns
@@ -165,6 +167,69 @@ Team/targeting details:
   stale node nobody can select (its chain is gone), and — being the first
   `BaseNode` in the tree — would be adopted as the *next* match's player root,
   which then spawns the enemy and the camera offset off the wrong place.
+
+## Purple pools
+
+`GameManager.CreatePools()` lays a fixed `PoolField` of `PurplePool`s over the
+map's ground at match start. Nothing reads a pool yet — they are decoration with
+a query API, and the collision checks they exist for are not written.
+
+- **The layout is fixed, not generated.** `PoolField.Scatter()` takes as many
+  candidate positions as the coverage target asks for and keeps the ones with
+  room; a candidate is a point in the unit square from a fixed integer hash of its
+  index (`PoolField.CandidateAt` / `Hash01`). There is no seed, no generator and no
+  stored table anywhere in the two pool scripts — the hash *is* the map, and it
+  gives the same pools in the same places on every run. It is deliberately not a
+  grid: nothing lines up, which is also why it is not a low-discrepancy sequence
+  (Halton's points land on a lattice in each axis taken alone). Exported on
+  `GameManager`: `SpawnPools`, `PoolSide` (three node diameters — a node's radius
+  is 1.0, so 6.0) and `PoolCoverageFraction` (1/100 by default: the count follows
+  from it, giving 63 pools over the 475×475 map).
+- **The field** is `GetMinimapWorldRect()` — the region the minimap already
+  treats as the map — because the ground plane is a 10000×10000 slab with no
+  real bounds (1/100 of *that* would be ~28000 pools). A real map size should
+  move the pools and the minimap onto it together.
+- **No two pools touch.** `Scatter()` rejects any candidate within
+  `side × 1.2` of a placed pool — footprints plus both rims — so pools never
+  overlap, every one can sit at the same height, and the coverage counted really
+  is ground that is pool. (An authored layout that *did* overlap pools would need
+  a small per-pool height spread instead: two coincident surfaces z-fight into a
+  flicker.)
+- **The shape** is a rounded square of solid energy with a rim of dead, sandy
+  grass around it. There is no rounded-square primitive, so `PurplePool.CreateMesh()`
+  builds one once per pool size (two surfaces: the sandy rim with its own fixed
+  material, and the pool left bare for each pool to override with the material it
+  pulses) and `PoolField` hands that one mesh to every pool on the map. The rim is
+  drawn *outside* the pool's footprint: `Side`, `ContainsXZ` and `OverlapsXZ` are
+  the energy, not the sand, so the rim changes the map's looks and not its
+  geometry — and `CoveredFraction` counts only the pools.
+- **The effect**: the pool is opaque and always drawn, and the pulse is its
+  *colour* — a rise from a resting violet to a bright glow, a hold, a fall back,
+  then a rest, all on the same 5-second cycle; one `_Process` in `PoolField`
+  drives every pool. Each pool starts at its own point in that cycle, taken from
+  its index by a golden-ratio walk (`PoolField.PhaseFor`) — fixed, so the map is
+  reproducible, but spread out, so the field shimmers instead of pulsing as one
+  sheet. Lighting up is the unshaded albedo brightening — *not* an `OmniLight3D`
+  per pool (hundreds of lights in the forward renderer) and not glow
+  post-processing (the project has no `WorldEnvironment`). Nothing about the pulse
+  touches alpha: a pool is a thing you could fall into, not a tint over the grass.
+- **The minimap does not pulse.** Pool geometry is drawn on
+  `PurplePool.WorldRenderLayer` (layer 2), the main camera is added to that layer
+  in `CreatePools()`, and the minimap camera has it cleared in `CreateMinimap()`;
+  the minimap draws flat `ColorRect` markers instead (`UpdateMinimapPoolMarkers`),
+  one per pool in `MinimapPoolColor` (the pool's lit colour) and never animated.
+  Their size is the pool's true size on the map, floored at
+  `MinimapPoolMarkerSize` (3 px) — a 6-unit pool across a 475-unit map is barely
+  one pixel, and a marker that cannot be seen is not a marker. Below the cables
+  and the node dots, so a node standing in a pool stays readable.
+- **Future collision checks** read `GameManager.Pools`: `PoolAt(position)` for a
+  point (does this landing spot lie in a pool), `OverlappingPools(centre, radius,
+  buffer)` for something with a size of its own (a node, an ammo round).
+- `Scenes/base_node.tscn` nodes are **radius 1.0** (doubled): the mesh, the
+  collision shape and the highlight ring (1.4 — kept at 1.4× the node so the ring
+  still shows around it). A node is therefore 2 units across, which is what
+  `PoolSide` is derived from, and what `Bomb.cs`'s "about one node wide" note
+  refers to.
 
 ## Camera: centering, panning, minimap
 

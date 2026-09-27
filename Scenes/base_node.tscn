@@ -4,17 +4,20 @@
 [ext_resource type="PackedScene" path="res://Scenes/explosion.tscn" id="2_g2ppn"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_uqfem"]
+top_radius = 1.0
+bottom_radius = 1.0
 height = 0.2
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_a0hpm"]
 albedo_color = Color(1, 0, 0, 1)
 
 [sub_resource type="CylinderShape3D" id="CylinderShape3D_g2ppn"]
+radius = 1.0
 height = 0.2
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_1h4vy"]
-top_radius = 0.7
-bottom_radius = 0.7
+top_radius = 1.4
+bottom_radius = 1.4
 height = 0.02
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_jo2l5"]
