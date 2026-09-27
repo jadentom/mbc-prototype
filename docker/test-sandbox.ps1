@@ -281,6 +281,19 @@ Add-Result 'the built assembly is where Godot loads it from' ($assembly.ExitCode
 
 # ── 10. the game boots headlessly ────────────────────────────────────────────
 
+# Import first. Godot cannot run a project it has never imported -- the main
+# scene is a UID and every texture comes from .godot/imported -- so against a
+# fresh -godot volume (a new box, or any -Reset) the run below aborted with
+# "Unrecognized UID" and exit 1 without booting anything, which made this check
+# a warning about a healthy deployment. run-sandbox.ps1 imports when the box
+# starts; repeating it here keeps the check meaningful for a container that was
+# already running (-SkipStart), and names the cause if it ever fails again.
+$import = Invoke-InContainer $docker 'cd /workspace && godot --headless --path /workspace --import' 600
+if ($import.ExitCode -ne 0) {
+    Write-Host ($import.Lines | Select-Object -Last 25 | Out-String) -ForegroundColor DarkGray
+}
+Add-Result 'the project imports in the container' ($import.ExitCode -eq 0) "godot --headless --import -> exit $($import.ExitCode)"
+
 $boot = Invoke-InContainer $docker 'cd /workspace && godot --headless --path /workspace --quit-after 60' 300
 if ($boot.ExitCode -ne 0) {
     Write-Host ($boot.Lines | Select-Object -Last 25 | Out-String) -ForegroundColor DarkGray

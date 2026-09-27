@@ -167,7 +167,9 @@ read it before touching anything camera-related. In short:
 
 ## Input map (`project.godot`)
 
-- `fire_shot`: Space, W
+- `fire_shot`: Up arrow, W — the arrow keys both aim (Left/Right) and launch
+  (Up), which is what the in-game hint means by "Arrow keys or WAD to launch".
+  Space is not bound to anything.
 - `aim_left`: A, Left arrow
 - `aim_right`: D, Right arrow
 - `switch_ammo_next`: E — `switch_ammo_previous`: Q

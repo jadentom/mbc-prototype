@@ -316,6 +316,42 @@ function Sync-GitCredentials([string]$Docker, [string]$Name, [string]$ProjectPat
     return 'SSH key installed, github.com unverified'
 }
 
+<#
+Imports the project once, so the box can run the game from the moment it starts.
+
+Godot cannot run a project it has never imported. `project.godot` names its main
+scene by UID and every texture is loaded out of `.godot/imported`; both are
+products of the import pass, which only the editor used to trigger. Against a
+fresh `-godot` volume -- a new box, or any `-Reset` -- the headless run the root
+orientation file hands a session therefore dies before it boots anything:
+
+    ERROR: Unrecognized UID: "uid://...".
+    Couldn't detect whether to run the editor ... Aborting.
+
+exit code 1, with nothing in it to say that the project was never imported. That
+made test-sandbox.ps1's boot check a warning about a healthy deployment, and it
+is what a session hits on its first `godot --headless --path /workspace ...`.
+
+The pass is idempotent and takes a couple of seconds; the editor writes the same
+data when a human opens the project. Like Sync-GitCredentials this reports
+rather than throws -- a box that cannot import still serves the Web UI -- and its
+verdict is repeated in the closing summary.
+#>
+function Import-GodotProject([string]$Docker, [string]$Name) {
+    # The timeout wraps bash, not the command text: `timeout 600 cd /workspace
+    # && ...` would ask timeout to execute a program named `cd`.
+    $import = Invoke-Captured $Docker @('exec', $Name, 'timeout', '600', 'bash', '-lc',
+        'cd /workspace && godot --headless --path /workspace --import')
+    if ($import.ExitCode -eq 0) {
+        Write-Note 'the project is imported, so headless runs work from here'
+        return 'imported (headless runs ready)'
+    }
+    Write-Warn2 "the project did not import: $(($import.Lines | Select-Object -Last 1))"
+    Write-Warn2 'a headless run aborts with "Unrecognized UID" until it does:'
+    Write-Warn2 "  docker exec $Name godot --headless --path /workspace --import"
+    return 'NOT imported (headless runs will fail)'
+}
+
 <# The Docker Desktop launcher, in either install layout. #>
 function Resolve-DesktopPath {
     foreach ($candidate in @(
@@ -616,6 +652,12 @@ function Invoke-Main {
     }
     Write-Note "ready: $url"
 
+    # The box is up, but it cannot run the game until the project has been
+    # imported once -- see Import-GodotProject. Reported, not thrown: the Web UI
+    # is serving either way, and the verdict is repeated in the summary.
+    Write-Head 'Project import'
+    $godotStatus = Import-GodotProject -Docker $docker -Name $ContainerName
+
     if (-not $NoBrowser) {
         Start-Process $url | Out-Null
         Write-Note 'opening the default browser'
@@ -628,6 +670,7 @@ function Invoke-Main {
     Write-Host "  project   : $ProjectPath  (mounted at /workspace)"
     Write-Host "  harness   : $DshHome  (mounted at /dsh-home)"
     Write-Host "  git       : $gitStatus"
+    Write-Host "  godot     : $godotStatus"
     Write-Host ''
     Write-Host "  logs  : docker logs -f $ContainerName"
     Write-Host "  shell : docker exec -it $ContainerName bash"

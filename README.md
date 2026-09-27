@@ -30,7 +30,7 @@ and run `Scenes/main_scene.tscn` (`res://`).
 
 | Action | Input |
 | --- | --- |
-| Fire (charge & release) | Space, W |
+| Fire (charge & release) | Up arrow, W |
 | Aim left / right | A / D, Left / Right arrow |
 | Switch ammo | E (next), Q (previous) |
 | Select node | Left-click one of your nodes |
