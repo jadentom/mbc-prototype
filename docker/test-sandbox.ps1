@@ -220,7 +220,19 @@ $dsh = Invoke-InContainer $docker 'dsh --version'
 $dshLine = Get-LastLine $dsh
 Add-Result 'dsh CLI responds' ($dsh.ExitCode -eq 0) $dshLine
 
-# ── 7. the project builds ────────────────────────────────────────────────────
+# ── 7. the root orientation file ─────────────────────────────────────────────
+
+# A session in this box starts at `/`, so this is the one document a fresh agent
+# cannot miss -- and it is spelled `AGENTS.md` because that is the name DSH's
+# agent-instructions preset discovers in the workspace root and its ancestors,
+# which is what makes it load without anything opening it. Both halves are the
+# contract: the file has content, and the reader-facing `README.md` spelling of
+# it resolves too (a symlink, so a build that lost either one shows up here
+# rather than in a session that then has to go looking for the project).
+$orientation = Invoke-InContainer $docker 'test -s /AGENTS.md && test -s /README.md'
+Add-Result 'the root orientation file is installed' ($orientation.ExitCode -eq 0) '/AGENTS.md non-empty; /README.md symlink'
+
+# ── 8. the project builds ────────────────────────────────────────────────────
 
 Write-Host ''
 Write-Host '--- building the project inside the container (this is the slow one) ---' -ForegroundColor Cyan
@@ -233,7 +245,7 @@ Add-Result 'MbcPrototype.csproj builds in the container' ($build.ExitCode -eq 0)
 $assembly = Invoke-InContainer $docker 'ls -1 /workspace/.godot/mono/temp/bin/Debug/MbcPrototype.dll'
 Add-Result 'the built assembly is where Godot loads it from' ($assembly.ExitCode -eq 0) (Get-LastLine $assembly)
 
-# ── 8. the game boots headlessly ─────────────────────────────────────────────
+# ── 9. the game boots headlessly ─────────────────────────────────────────────
 
 $boot = Invoke-InContainer $docker 'cd /workspace && godot --headless --path /workspace --quit-after 60' 300
 if ($boot.ExitCode -ne 0) {

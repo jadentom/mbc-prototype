@@ -175,3 +175,13 @@ RUN set -eux; \
 RUN printf '%s\n' '#!/bin/sh' 'exec /opt/godot/godot "$@"' > /usr/local/bin/godot \
     && chmod +x /usr/local/bin/godot \
     && ls -l /usr/local/bin/godot
+
+# The root orientation file, identical to the one the other Dockerfile installs
+# and for the same reasons (see the long comment there): `/AGENTS.md` is loaded
+# as baseline workspace instructions for a session whose cwd is `/`, and
+# `/README.md` symlinks to it. This variant differs only in the base image, so a
+# session in it should land on the same map of the box.
+COPY CONTAINER-README.md /AGENTS.md
+RUN ln -s /AGENTS.md /README.md \
+    && chmod 0644 /AGENTS.md \
+    && ls -l /AGENTS.md /README.md

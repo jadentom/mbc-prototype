@@ -37,7 +37,11 @@ container would collide with it.
 | dsh | `0.1.1-rc.2` (`ARG DSH_VERSION`) | the version this host runs, so a session in the box behaves like one outside it; its dependency tree is pinned to the day that release was current (`ARG DSH_BEFORE`), because unpinned caret ranges resolve to cordis releases this dsh cannot boot with |
 
 The project is mounted at `/workspace`, which is also the container's working
-directory, so it is the session's workspace root.
+directory — but *not* the session's workspace root: the Workspace this box's Web
+UI was set up with is the container root `/`, which is what gives a session the
+whole machine instead of only the project. That choice lives in `DSH_HOME`
+(`storages/workspace.json`), so it survives rebuilds but not a deleted
+`~/.dsh-docker`.
 
 The build does not merely assemble the image: the last step boots `dsh web`
 inside it, with the same patch layer the run script installs, and requires it to
@@ -46,6 +50,28 @@ tree that resolves into an unloadable plugin — therefore fails `docker build`
 instead of failing silently at container start. That makes `-Rebuild` the check
 to run after touching `Dockerfile` or `cordis.patch.yml`, before any of the
 runtime assertions in `test-sandbox.ps1` get a chance to run.
+
+## The root orientation file
+
+A session here starts at `/`, and `/` is also the filesystem root, so a file
+there is the one thing every session sees without searching for it. The image
+therefore installs `CONTAINER-README.md` at `/AGENTS.md`, with `/README.md` as a
+symlink to it, so a new agent lands on the layout of the box instead of spending
+its first turns rediscovering it — the project guide is two levels down
+(`/workspace/AGENTS.md`) and the sandbox's own guide three
+(`/workspace/docker/README.md`).
+
+The **name** is what does the work, not the location: DSH's `agent-instructions`
+preset discovers `AGENTS.md` (then `CLAUDE.md`) in the workspace root and its
+ancestors, so for a session whose cwd is `/` the file arrives as baseline
+workspace instructions — nothing has to be opened. That covers the Workspace
+described above; a session created against `/workspace` instead sees the project
+guide there, exactly as a host session does, and `/AGENTS.md` is then only what
+`ls /` turns up. Both files are checked by `test-sandbox.ps1`.
+
+Edit `CONTAINER-README.md` here and rebuild: the file inside a container is
+replaced wholesale on every build, so a change made in a running container dies
+with that container.
 
 ## Mounts
 
@@ -178,7 +204,7 @@ sidesteps the whole class by construction — it installs `@deepseek-ai/dsh@next
 at build time and tags the result with the version it got, so dsh and its cordis
 dependencies are always resolved together and published as one immutable tag.
 
-One command builds it, starts it and runs the same eight checks:
+One command builds it, starts it and runs the same end-to-end checks:
 
 ```powershell
 .\docker\test-sandbox.ps1 -DockerFile Dockerfile.smanx `
@@ -191,7 +217,7 @@ build-cache volumes. What to expect from the result:
 
 | check | variant expectation |
 | --- | --- |
-| toolchain, `dotnet build`, headless boot | should behave exactly as ours — that layer is identical |
+| toolchain, `dotnet build`, headless boot, root orientation file | should behave exactly as ours — that layer is identical |
 | `Web UI answers`, `dsh CLI responds` | pass, but through *their* entrypoint (`dsh web --port 3079` + a proxy on 3080) |
 | `fence refuses a non-loopback Host` | **expected to fail** — see below. Reported as the finding, not as a broken test |
 | `fence accepts a loopback Host` | passes either way |
@@ -223,6 +249,7 @@ Two things worth checking by hand before trusting it:
 | --- | --- |
 | `Dockerfile` | the image: Node, Godot 4.5.1 .NET, .NET 8 SDK, dsh — and the build-time boot smoke test |
 | `Dockerfile.smanx` | the A/B variant: the same toolchain on the community DSH image |
+| `CONTAINER-README.md` | the orientation file both images install at `/AGENTS.md` (with `/README.md` symlinked to it) — the one a session finds without looking; this is the copy to edit |
 | `cordis.patch.yml` | the two `DSH_HOME` rows this deployment needs: the `webserver` bind override and the re-enabled `hmr` row, both commented with why |
 | `cordis.patch.smanx.yml` | the same minus the `webserver` row, which that image's entrypoint proxy replaces |
 | `run-sandbox.ps1` | build, start, wait for readiness, open the browser, desktop shortcut |

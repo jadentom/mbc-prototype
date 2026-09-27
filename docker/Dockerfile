@@ -237,6 +237,36 @@ RUN printf '%s\n' '#!/bin/sh' 'exec /opt/godot/godot "$@"' > /usr/local/bin/godo
     && chmod +x /usr/local/bin/godot \
     && ls -l /usr/local/bin/godot
 
+# An orientation file where a session cannot miss it.
+#
+# A session in this box starts at `/`: the Web UI's Workspace is the container
+# root, which is the point of the box. And `/` is also the filesystem root, so
+# it is the one directory every session sees first -- while the project guide
+# sits two levels down (/workspace/AGENTS.md) and the sandbox's own guide three
+# (/workspace/docker/README.md). Without a pointer up here, every new session
+# spends its first turns rediscovering the layout.
+#
+# The name is load-bearing, not decorative: DSH's agent-instructions preset
+# looks for `AGENTS.md` (then `CLAUDE.md`) in the workspace root and its
+# ancestors, so with cwd `/` this file arrives as baseline workspace
+# instructions -- found without being looked for. `/README.md` is the same bytes
+# under the name a reader actually reaches for, as a symlink so the two cannot
+# drift apart.
+#
+# Copied from `docker/CONTAINER-README.md`, which is the file to edit: what lands
+# in the image is a copy, and the image is rebuilt rather than patched. Placed
+# last on purpose -- prose changes far more often than anything above it, and a
+# COPY layer costs nothing to redo.
+#
+# The mode is set rather than inherited: the build context is a Windows
+# directory, so whatever mode arrives is synthetic, and a doc that reads back
+# `777` invites exactly the wrong guess about what it is (see the credentials
+# note in README.md for where a wide mode really does matter).
+COPY CONTAINER-README.md /AGENTS.md
+RUN ln -s /AGENTS.md /README.md \
+    && chmod 0644 /AGENTS.md \
+    && ls -l /AGENTS.md /README.md
+
 # The project is mounted here, so this is also the session workspace root.
 WORKDIR /workspace
 
