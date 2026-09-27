@@ -1,0 +1,177 @@
+# syntax=docker/dockerfile:1
+#
+# A/B alternative to `Dockerfile`: the community DSH image as the base, with the
+# same Godot toolchain layered on top.
+#
+# Why it exists
+# -------------
+# `Dockerfile` builds the harness itself: Node 24 plus `npm install -g
+# @deepseek-ai/dsh@<pinned release>`. That install is where this project's most
+# expensive failure came from (see the `ARG DSH_BEFORE` comment there): a release
+# pinned exactly, with caret ranges underneath, resolves dependencies the release
+# cannot boot with. `smanx/deepseek-harness` sidesteps that by construction -- it
+# installs `@deepseek-ai/dsh@next` at build time and tags the image with the
+# version it got, so dsh and its cordis dependencies are always resolved together
+# and published as one immutable tag.
+#
+# What that costs, which is what the A/B is for:
+#
+#   * the dsh version is theirs, not this host's (`0.1.5-rc.3` against the host's
+#     `0.1.1-rc.2`), so sessions in the box are no longer version-identical to
+#     sessions on the host. `SMANX_TAG=devtools-0.1.1-rc.2` matches the version but
+#     then tests their older tree instead of their current one.
+#   * the entrypoint is not ours: it runs `dsh web --port 3079` on loopback and
+#     then `exec node /app/proxy/index.js` on 0.0.0.0:3080, scraping the launch
+#     token out of `/app/.dsh-web.log`. That is what the `webserver` row in
+#     `cordis.patch.yml` does for our own variant, so this variant uses
+#     `cordis.patch.smanx.yml` instead, which carries the `hmr` row alone.
+#   * the proxy does not preserve the browser's Host, so DSH's browser-trust fence
+#     has nothing left to refuse. `proxy/index.js` creates the proxy with
+#     `changeOrigin: true` and rewrites the request's `Origin` to the upstream as
+#     well, so DSH sees `127.0.0.1:3079` -- a loopback authority -- whatever the
+#     client sent. `test-sandbox.ps1` asserts that fence against port 3080, so
+#     under this base "fence refuses a non-loopback Host" is expected to fail.
+#     That is the finding, not a broken test: for this variant the boundary is the
+#     published host port plus whatever the proxy enforces itself -- and the proxy
+#     enforces nothing unless PROXY_USERNAME and PROXY_PASSWORD are both set
+#     (`checkAuth` returns true when either is empty).
+#   * the proxy also rewrites response bodies: it injects a `crypto.randomUUID`
+#     polyfill into HTML and replaces `isLoopbackHostname(pageLocation.hostname)`
+#     with `true` in JS, so the client a session serves is not byte-identical to
+#     the one our own variant serves. Harmless on loopback, where both are already
+#     true, but it is code in front of the harness that we do not own.
+#
+# Build and score it (one command builds, starts and runs the eight checks):
+#
+#   .\docker\test-sandbox.ps1 -DockerFile Dockerfile.smanx `
+#       -PatchFile cordis.patch.smanx.yml -Rebuild `
+#       -ImageName godot-dsh-sandbox-smanx -ContainerName deepseek-godot-sandbox-smanx
+#
+# Everything below the base image is deliberately the same toolchain layer the
+# other Dockerfile carries, so the comparison is of harness packaging only.
+#
+# Their own build passes no `--allow-scripts`, unlike ours. If their npm skipped
+# the `node-pty` binding, the container's terminal tool would be dead while
+# everything else looks healthy -- check with
+# `docker run --rm --entrypoint node <image> -e "require('node-pty')"` before
+# trusting this variant.
+
+ARG SMANX_TAG=devtools-0.1.5-rc.3
+FROM smanx/deepseek-harness:${SMANX_TAG}
+
+ARG GODOT_VERSION=4.5.1
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_NOLOGO=1 \
+    DOTNET_RUNNING_IN_CONTAINER=true
+
+# Godot's shared libraries, plus the handful of tools this file itself needs.
+# The `devtools` variant already provides git, curl, unzip, procps, python3,
+# build-essential, tmux, jq and friends -- they are restated here so that a bare
+# tag (SMANX_TAG=0.1.5-rc.3, which ships no tools at all) still builds and still
+# gives an agent session a git and a ps. What no variant has is the X/ALSA stack
+# the Linux editor links against, which it needs even for `--headless` runs
+# because the binary loads them at startup.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        wget \
+        git \
+        procps \
+        xz-utils \
+        unzip \
+        libfontconfig1 \
+        libgl1 \
+        libxcursor1 \
+        libxinerama1 \
+        libxrandr2 \
+        libxi6 \
+        libxkbcommon0 \
+        libasound2 \
+        libpulse0 \
+        libudev1 \
+        xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+# .NET 8 SDK from Microsoft's Debian 12 feed -- the same base distribution this
+# image is built on, so the same feed applies.
+RUN wget -q https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb -O /tmp/ms-prod.deb \
+    && dpkg -i /tmp/ms-prod.deb \
+    && rm /tmp/ms-prod.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends dotnet-sdk-8.0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Godot 4.5.1 .NET editor. The release zip unpacks to a version-named directory
+# holding both the executable and GodotSharp/, which must travel together --
+# GodotSharp/ has to stay a sibling of the binary, so the directory is what goes
+# on PATH rather than the executable.
+RUN set -eux; \
+    wget -q -O /tmp/godot.zip \
+        "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip"; \
+    unzip -q /tmp/godot.zip -d /tmp/godot; \
+    src="$(find /tmp/godot -mindepth 1 -maxdepth 1 -type d -name 'Godot_v*' | head -n1)"; \
+    [ -n "$src" ] || src=/tmp/godot; \
+    mkdir -p /opt/godot; \
+    mv "$src/GodotSharp" /opt/godot/GodotSharp; \
+    mv "$src"/Godot_v*_mono_linux.x86_64 /opt/godot/godot; \
+    chmod +x /opt/godot/godot; \
+    rm -rf /tmp/godot /tmp/godot.zip
+
+ENV PATH="/opt/godot:${PATH}"
+
+# The project is mounted here, so this is also the session workspace root. This
+# overrides the base image's /app.
+WORKDIR /workspace
+
+# Documentation only: the base image's proxy listens on 3080 and the run script
+# publishes that port on the host loopback.
+EXPOSE 3080
+
+# Boot this image *through its own entrypoint* and require the proxy to answer.
+#
+# Testing the entrypoint rather than `dsh web` directly is the point: it is what
+# production runs, and it starts two things in sequence -- DSH on loopback 3079,
+# then the proxy on 0.0.0.0:3080 -- so polling 3080 exercises both stages. The
+# seeded patch is the same layer the run script installs, so a patch that fails
+# to compose fails the build too.
+#
+# The probe deliberately does not use `curl -f`: the proxy mints its session
+# cookie by catching a 401 from upstream, so an initial 401 means the stack is up
+# and working, not that it failed. Readiness here means "something is answering";
+# `test-sandbox.ps1` is where the published port is required to return 200.
+COPY cordis.patch.smanx.yml /tmp/dsh-smoke-seed/cordis.patch.yml
+
+RUN set -eux; \
+    cd /tmp; \
+    mkdir -p /tmp/dsh-smoke; \
+    cp /tmp/dsh-smoke-seed/cordis.patch.yml /tmp/dsh-smoke/cordis.patch.yml; \
+    DSH_HOME=/tmp/dsh-smoke /app/entrypoint.sh > /tmp/dsh-smoke.log 2>&1 & \
+    pid=$!; \
+    ready=0; i=0; \
+    while [ "$i" -lt 30 ]; do \
+        if curl -s -o /dev/null http://127.0.0.1:3080/; then ready=1; break; fi; \
+        i=$((i + 1)); \
+        sleep 2; \
+    done; \
+    if [ "$ready" != 1 ]; then \
+        echo '--- the proxy is not answering 60s after boot ---'; \
+        cat /tmp/dsh-smoke.log; \
+        kill "$pid" 2>/dev/null || true; \
+        exit 1; \
+    fi; \
+    kill "$pid" 2>/dev/null || true; \
+    sleep 1; \
+    head -n 5 /tmp/dsh-smoke.log; \
+    rm -rf /tmp/dsh-smoke /tmp/dsh-smoke-seed /tmp/dsh-smoke.log
+
+# Make `godot` reachable from a login shell, for the same reason as in the other
+# Dockerfile: `ENV PATH` covers `docker run` and non-login shells, but Debian's
+# /etc/profile assigns PATH outright, so `bash -l`/`bash -lc` -- what
+# `test-sandbox.ps1` probes with, and what a shell inside a session starts as --
+# loses /opt/godot. A wrapper rather than a symlink, so the running executable
+# stays at /opt/godot/godot where GodotSharp/ sits beside it.
+RUN printf '%s\n' '#!/bin/sh' 'exec /opt/godot/godot "$@"' > /usr/local/bin/godot \
+    && chmod +x /usr/local/bin/godot \
+    && ls -l /usr/local/bin/godot

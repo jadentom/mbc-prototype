@@ -1,0 +1,62 @@
+# DSH home-level patch layer for the container.
+#
+# The run script copies this file to <DSH home>/cordis.patch.yml, the layer DSH
+# applies after the profile's own patch, so it wins over the shipped web bundle.
+#
+# What it is for
+# --------------
+# `dsh web` binds 127.0.0.1 by default, and Docker publishes a port by
+# forwarding to the *container's interface address* — never its loopback — so a
+# default-bound server inside the container is unreachable from the host. The
+# obvious fix, `dsh web --host 0.0.0.0`, is rejected on purpose:
+#
+#   error: --host 0.0.0.0 is intentionally not supported yet for safety: it
+#   would expose remote code execution to the network; use 127.0.0.1 instead
+#
+# The config field is the documented escape hatch for a deliberate deployment
+# (the webserver schema accepts exactly `127.0.0.1` and `0.0.0.0`), and this
+# patch layer is where a deployment is supposed to say so.
+#
+# Why this is still contained
+# ---------------------------
+# The harness has no authentication layer, so reachability *is* the policy:
+#   * the run script publishes the port on the host loopback only
+#     (-p 127.0.0.1:<port>:3080), so nothing off this machine can connect;
+#   * the /api browser-trust fence accepts loopback authorities, so a browser
+#     arriving as http://localhost:<port> or http://127.0.0.1:<port> passes.
+# Do not widen the publish address without adding a real auth layer in front.
+#
+# A patch replaces the targeted row's whole `config` — there is no deep merge —
+# so `port` is restated here even though it keeps its default value.
+- id: webserver
+  config:
+    host: '0.0.0.0'
+    port: 3080
+
+# Mount the `hmr` row instead of letting DSH create it after the tree settles.
+#
+# This row is not what makes HMR work -- pinning the dependency tree in the
+# Dockerfile is (`cordis-plugin-hmr` 1.0.19 dropped the `registerConfig` method
+# that this dsh release still calls). What this row buys is a failure you can
+# read.
+#
+# `dsh-web-app` disables the inherited `hmr` row, and `runProfile` compensates by
+# calling `ctx.loader.create({ name: '@deepseek-ai/cordis-plugin-hmr' })` once
+# boot has finished. When that service is unusable, the create path says nothing
+# useful: `ctx.get('hmr')` is undefined a moment later and the boot dies with
+#
+#   dsh: user patch-layer watching requires the Cordis HMR service
+#
+# which names neither the service nor the method that went missing. Mounting the
+# row moves the plugin into the normal boot path, where it fails loudly instead.
+# That is how the version drift was found: with the row enabled, the same broken
+# tree reported `hmr.registerConfig is not a function`, and the object behind it
+# could be inspected (`ctor=Hmr`, method absent) rather than inferred.
+#
+# `root: []` matches what the post-boot create passed: no project directory is
+# watched, so nothing reloads behind your back — the patch files that
+# `registerConfig` names get exact-path watchers of their own.
+- id: hmr
+  disabled: false
+  config:
+    root: []

@@ -1,0 +1,24 @@
+# DSH home-level patch layer for the `smanx/deepseek-harness` variant.
+#
+# This is `cordis.patch.yml` with its `webserver` row removed, and that omission
+# is the whole difference between the two variants:
+#
+#   * the `webserver` row exists in the other variant because `dsh web` binds
+#     127.0.0.1 by default, while Docker publishes a port by forwarding to the
+#     *container's interface address*, never its loopback. This base image solves
+#     that with a reverse proxy instead -- its entrypoint runs DSH on loopback
+#     port 3079 and `node /app/proxy/index.js` on 0.0.0.0:3080. Patching the
+#     webserver row here would make DSH bind 3080 as well and the proxy would then
+#     have no port to listen on, so the entrypoint would fail.
+#   * the `hmr` row is kept for the same reason as in the other variant: it is not
+#     what makes HMR work, but a mounted row fails loudly where a plugin created
+#     after the tree settles fails silently with "user patch-layer watching
+#     requires the Cordis HMR service".
+#
+# If this base's `cordis-plugin-hmr` has a config schema without `root`, the row
+# itself becomes that loud failure: drop the `config` block, which leaves the
+# plugin on its own defaults (watching the base directory, which is the DSH home).
+- id: hmr
+  disabled: false
+  config:
+    root: []
