@@ -12,6 +12,12 @@ Destroy the enemy's root node to win: a root's destruction cascades through its
 whole chain, so the match ends the moment one side runs out of nodes. Any key
 or click on the victory/defeat screen restarts.
 
+Bombs have a blast: 1.5 world units around where they land is a direct hit, and
+the ring out to 3 units does half damage, so a good bomb hurts several nodes at
+once. The blast draws expanding spheres and leaves a marker on the ground
+showing where those two radii were, and each node's health bar is divided into
+one segment per point of health.
+
 ## Requirements
 
 - Godot 4.5.1 stable (`.NET`/mono build), GL Compatibility renderer
@@ -45,7 +51,8 @@ Scenes/          Godot scene files (main_scene, base_node, ammo, health bar)
 Scripts/
   Core/          GameManager (turn rotation, aiming/firing, camera), BaseNode,
                  PlayerCombatant
-  Combat/        Projectile, Bomb, Explosion, AmmoLauncher, AmmoType
+  Combat/        Projectile, Bomb (+ BlastVisual), Explosion, AmmoLauncher,
+                 AmmoType
   TurnSystem/    TurnEvent, Combatant, NodeChainCombatant
   Enemies/       EnemyCombatant (the AI)
 Shaders/         CableShader.gdshader

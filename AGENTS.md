@@ -71,14 +71,16 @@ not stored in the scene. See [docs/camera](docs/camera/README.md).
 | File | Role |
 | --- | --- |
 | `Scripts/Core/GameManager.cs` | Singleton (`GameManager.Instance`), combatant rotation + turn flow, aiming/firing for the player, camera (centering, **edge panning**, **minimap** — see [docs/camera](docs/camera/README.md)). |
-| `Scripts/Core/BaseNode.cs` | Chain node: health, highlight ring, cable to parent, health-bar SubViewport sprite, destruction cascade. Knows its owning `OwnerChain`. |
+| `Scripts/Core/BaseNode.cs` | Chain node: health, highlight ring, cable to parent, health-bar SubViewport sprite (a divider line per point of health), destruction cascade. Knows its owning `OwnerChain`. |
 | `Scripts/Core/PlayerCombatant.cs` | The human's combatant: a `NodeChainCombatant` whose aim/charge/fire comes from input in `GameManager`. |
 | `Scripts/TurnSystem/Combatant.cs` | Abstract turn participant (team, defeat rule, `BeginTurn`/`EndTurn`). The rotation only ever talks to this. |
 | `Scripts/TurnSystem/NodeChainCombatant.cs` | Combatant built from a node chain: node registry, root lookup, defeat check, `Launch()`. |
 | `Scripts/Enemies/EnemyCombatant.cs` | The AI enemy: plans one action per turn (alternating node/bomb), random aim/power, fires after `ThinkTime`. |
 | `Scripts/Combat/AmmoLauncher.cs` | The single launch path for both sides (aim angle → velocity, ammo scene, `TurnEvent`). |
 | `Scripts/Combat/AmmoType.cs` | `AmmoType { Node, Bomb }`. |
-| `Scripts/Combat/Projectile.cs` / `Scripts/Combat/Bomb.cs` | Ammo: ballistic bodies that damage `BaseNode`s and resolve a `TurnEvent`. |
+| `Scripts/Combat/Projectile.cs` | Ammo: a ballistic body that deploys a `BaseNode` where it lands, and resolves a `TurnEvent`. |
+| `Scripts/Combat/Bomb.cs` | Ammo: a ballistic body that detonates on contact and damages every `BaseNode` in its blast radii (see *Bomb blast*), resolving a `TurnEvent`. |
+| `Scripts/Combat/BlastVisual.cs` | A blast's visuals: expanding translucent spheres over the damage radii, plus a ground marker (disc + a ring per radius) showing where they landed. Built in code, spawned by `Bomb`. |
 | `Scripts/TurnSystem/TurnEvent.cs` | One unit of turn resolution; the turn ends when all pending events resolve. |
 | `Shaders/CableShader.gdshader` | Visual cable between chained nodes. |
 
@@ -141,6 +143,19 @@ Team/targeting details:
 - **Enemy tuning** (all exported on `GameManager`): `EnemyStartScreensRight`
   (default 2), `EnemyThinkTime`, `EnemyAimSpreadDegrees` (180 = fully random),
   `EnemyMinPower`/`EnemyMaxPower`, `CenterCameraOnActingCombatant`.
+- **Bomb blast**: a bomb damages by distance, not by what it touched. Exported
+  on `Bomb`: `DirectHitRadius` (1.5 world units) is the full-damage zone,
+  `OuterRadius` (3) the outer edge of the half-damage donut between them, and
+  past it a node takes nothing; `DirectHitDamage` (2) and `HalfDamage` (1) are
+  why `BaseNode.MaxHealth` is 6 rather than 3 — three direct bombs still
+  destroy a node, and a half hit is a whole point. Distance is measured along
+  the ground (XZ) from where the bomb went off, and **every** `BaseNode` in
+  range takes the damage, the firing combatant's own chain included.
+  `BlastVisual` spawns itself from `Bomb`, draws the same two radii as
+  expanding translucent spheres and as discs/rings on the ground, and frees
+  itself once its marker has faded. The health bar's divider lines are built
+  from `MaxHealth` (see `BaseNode.CreateHealthBarTicks`), so a hit that took
+  one point can be told from one that took two.
 - **Nothing spawned during a match is parented to the tree root.** Chain roots,
   ammo in flight, explosions and the nodes ammo deploys all go under
   `GameManager.SpawnContainer` (`NodeContainer`), and the player's starting
