@@ -38,6 +38,11 @@ carries the versions and the reason each one is pinned.
   project guide warns that `godot` and `dotnet` live outside the workspace.
 - There is no Docker CLI in here. Builds, restarts and tests happen on the host:
   `docker\run-sandbox.ps1` and `docker\test-sandbox.ps1`.
+- `git push` works from here. `run-sandbox.ps1` copies the host's git author into
+  `/root/.gitconfig` and its SSH key into `/root/.ssh` on every start, so commit
+  and push as usual. When the box was started with `-NoGitCredentials` there is no
+  key and no push — commit anyway and say so, rather than asking for credentials
+  that the human already decided not to hand over.
 - Don't leave probe scenes or `.gd` scripts in the repo — the project guide's
   *Build & run* explains why (they also leave `.uid` files behind).
 

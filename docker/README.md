@@ -73,6 +73,47 @@ Edit `CONTAINER-README.md` here and rebuild: the file inside a container is
 replaced wholesale on every build, so a change made in a running container dies
 with that container.
 
+## Committing and pushing from inside the box
+
+Sessions are where the work happens, so sessions are what needs the credentials:
+`run-sandbox.ps1` hands the container this machine's git author and its SSH
+material on every run, and then checks that GitHub accepts the result.
+
+* The author is read from this machine's **effective** config —
+  `git -C <repo> config --get user.name`, so a repository-local identity wins
+  exactly as it would here — and written into the container's own
+  `/root/.gitconfig`. Never into `.git/config` on the share: the box is
+  disposable and this machine's clone is not.
+* `%USERPROFILE%\.ssh` is copied to `/root/.ssh` with `docker cp`, then chmodded
+  to 700/600.
+* `ssh -T git@github.com` is run inside the container, because a key that is
+  present but not registered there behaves exactly like a working one until a
+  push fails — and a push is the expensive place to discover that.
+
+**Copied in, not mounted**, and ssh is what forces the distinction: it refuses a
+private key anyone else can read,
+
+```
+Permissions 0777 for '/root/.ssh/id_ed25519' are too open.
+```
+
+and that check reads the *file's* own mode, so no `StrictModes` setting talks it
+out of anything. An NTFS share reports every file as `777` — the same property
+that makes the harness refuse a credentials file from `/dsh-home`, and why the
+model key travels as an environment variable instead — so a bind mount would hand
+ssh a key it will not use, and every push would fail with a message about
+permissions rather than about credentials. `docker cp` puts the files on the
+container's own filesystem, where mode 600 sticks.
+
+Two switches shape it:
+
+* `-NoGitCredentials` skips the whole step: the box commits but cannot push, and
+  `test-sandbox.ps1`'s key check drops to a warning.
+* `-SshDirectory` chooses what is copied (default `%USERPROFILE%\.ssh`). Point it
+  at a directory holding a **deploy key** scoped to this repository, with its own
+  `config` naming it for github.com, when the box should be able to push and do
+  nothing else with your GitHub account.
+
 ## Mounts
 
 | host | container | notes |
@@ -146,6 +187,14 @@ kept narrow on purpose:
 
 Inside the container the agent runs as `root` and can `apt-get install`
 anything; that is the point of the box, and it is why the box is disposable.
+
+It also holds credentials on purpose, and that is worth stating plainly in a
+section about boundaries: the model key arrives as an environment variable, and
+`run-sandbox.ps1` copies your git author and the SSH key described in
+*Committing and pushing from inside the box* into `/root/.ssh`. Any session — that
+is, any agent, and anyone who can reach the Web UI — can read them and push with
+them. `-NoGitCredentials` keeps the box free of your key, and `-SshDirectory` with
+a deploy key limits what a leak would be worth.
 
 ## Troubleshooting
 
@@ -252,7 +301,7 @@ Two things worth checking by hand before trusting it:
 | `CONTAINER-README.md` | the orientation file both images install at `/AGENTS.md` (with `/README.md` symlinked to it) — the one a session finds without looking; this is the copy to edit |
 | `cordis.patch.yml` | the two `DSH_HOME` rows this deployment needs: the `webserver` bind override and the re-enabled `hmr` row, both commented with why |
 | `cordis.patch.smanx.yml` | the same minus the `webserver` row, which that image's entrypoint proxy replaces |
-| `run-sandbox.ps1` | build, start, wait for readiness, open the browser, desktop shortcut |
+| `run-sandbox.ps1` | build, start, wait for readiness, hand the container its git credentials, open the browser, desktop shortcut |
 | `test-sandbox.ps1` | end-to-end assertions about the running sandbox; `-DockerFile`/`-PatchFile`/`-ImageName`/`-ContainerName` score either variant |
 
 Scripts target **Windows PowerShell 5.1**, which is what this machine ships

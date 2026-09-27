@@ -7,7 +7,7 @@
     starts the container with the project mounted at /workspace, waits until the
     Harness Web UI answers, and opens it in the default browser.
 
-    Two things about this box are deliberate and worth knowing before editing:
+    Three things about this box are deliberate and worth knowing before editing:
 
       * The Web server binds 0.0.0.0 *inside* the container, because Docker
         publishes a port by forwarding to the container's interface address,
@@ -17,6 +17,11 @@
       * The published port is bound to the host loopback only
         (127.0.0.1:<port>). The Harness has no authentication layer, so
         reachability is the whole security boundary. Do not widen this.
+      * This machine's git author, and the SSH key in %USERPROFILE%\.ssh, are
+        copied into the container on every run, so a session can commit and push
+        by itself. That widens what the box holds: -NoGitCredentials skips it,
+        and a deploy key scoped to this repository is the tighter answer if the
+        box should be able to push and nothing else.
 
     Written for Windows PowerShell 5.1 (the version this machine ships).
 
@@ -58,6 +63,19 @@
 .PARAMETER NoBrowser
     Do not open a browser window.
 
+.PARAMETER NoGitCredentials
+    Do not copy this machine's git author and SSH material into the container.
+    Use it when the box should hold no key of yours: sessions can still commit,
+    but a push has to happen from this machine. By default the key in
+    -SshDirectory is copied in (mode 600) on every run, because a container is
+    where the harness sessions live and they are the ones that push.
+
+.PARAMETER SshDirectory
+    Directory whose contents become the container's /root/.ssh. Defaults to
+    %USERPROFILE%\.ssh. Point it at a directory holding a deploy key scoped to
+    this repository -- with its own `config` naming it for github.com -- when the
+    box should be able to push and do nothing else with your GitHub account.
+
 .PARAMETER NoPause
     Do not wait for Enter before the window closes.
 
@@ -92,9 +110,11 @@ param(
     [switch]$Recreate,
     [switch]$Reset,
     [switch]$NoBrowser,
+    [switch]$NoGitCredentials,
     [switch]$NoPause,
     [switch]$CreateShortcut,
-    [string]$ShortcutPath
+    [string]$ShortcutPath,
+    [string]$SshDirectory
 )
 
 Set-StrictMode -Version Latest
@@ -104,6 +124,7 @@ $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ScriptPath = $MyInvocation.MyCommand.Path
 if (-not $ProjectPath) { $ProjectPath = Split-Path -Parent $ScriptDir }
 if (-not $DshHome)     { $DshHome = Join-Path $env:USERPROFILE '.dsh-docker' }
+if (-not $SshDirectory) { $SshDirectory = Join-Path $env:USERPROFILE '.ssh' }
 
 function Write-Head([string]$Text) {
     Write-Host ''
@@ -201,6 +222,98 @@ function Get-HostApiKey {
         if ($line -match '^\s*DEEPSEEK_API_KEY\s*:\s*(\S+)\s*$') { return $Matches[1] }
     }
     return $null
+}
+
+<#
+Hands the container this machine's git author, and its SSH material when there is
+any, so that commits and `git push` work from inside a session and not only from
+here.
+
+Copied in, rather than mounted, and ssh's own key check is what forces that: a
+private key anyone else can read is refused outright ("Permissions 0777 ... are
+too open"), and that check reads the *file's* mode, so no StrictModes setting
+talks it out of anything. An NTFS share cannot express POSIX ownership -- every
+file on it reads back as 777, which is the same property that makes the harness
+refuse a credentials file from this share (see the DEEPSEEK_API_KEY comment in
+Invoke-Main) -- so a bind mount of %USERPROFILE%\.ssh would hand ssh a key it will
+not use, and every push would fail with a message about permissions rather than
+about credentials. `docker cp` lands the files on the container's own
+filesystem, where 600 sticks.
+
+The whole directory travels, not just the key: known_hosts is what stops ssh from
+asking whether github.com really is github.com, and a session has no console to
+answer that prompt on.
+
+Nothing in here throws. Credentials are a convenience the box is given, not a
+promise the deployment makes -- a machine with no key still gets a sandbox that
+runs the game, builds the project and serves the Web UI -- so every failure here
+is a warning and a note in the closing summary.
+#>
+function Sync-GitCredentials([string]$Docker, [string]$Name, [string]$ProjectPath, [string]$SshDirectory) {
+    $identity = $null
+    $gitCommand = Get-Command 'git' -ErrorAction SilentlyContinue
+    if ($gitCommand) {
+        # No --global and no --local: the question is which identity this
+        # machine's commits already carry, and that is the merged answer.
+        $authorName  = (Invoke-Captured $gitCommand.Source @('-C', $ProjectPath, 'config', '--get', 'user.name')).Lines  | Select-Object -First 1
+        $authorEmail = (Invoke-Captured $gitCommand.Source @('-C', $ProjectPath, 'config', '--get', 'user.email')).Lines | Select-Object -First 1
+        if ($authorName -and $authorEmail) {
+            # --global writes the container's own /root/.gitconfig, never the
+            # repository's .git/config on the share: the box is disposable and
+            # this machine's clone is not.
+            $null = Invoke-Captured $Docker @('exec', $Name, 'git', 'config', '--global', 'user.name', $authorName)
+            $null = Invoke-Captured $Docker @('exec', $Name, 'git', 'config', '--global', 'user.email', $authorEmail)
+            $identity = "$authorName <$authorEmail>"
+            Write-Note "the box commits as $identity"
+        }
+    }
+    if (-not $identity) {
+        Write-Warn2 'no git author found for this machine, so the box has none either:'
+        Write-Warn2 "  docker exec $Name git config --global user.name `"Your Name`""
+        Write-Warn2 "  docker exec $Name git config --global user.email you@example.com"
+    }
+
+    if (-not (Test-Path -LiteralPath $SshDirectory)) {
+        Write-Warn2 "no $SshDirectory on this machine, so the box cannot push:"
+        Write-Warn2 'push from this machine, or create a key and run this script again'
+        return 'no SSH key to install'
+    }
+
+    # Replace rather than merge: `docker cp` copies a directory *into* one that
+    # already exists, so a second run against the same container would leave the
+    # keys at /root/.ssh/.ssh and ssh would never look at them.
+    $null = Invoke-Captured $Docker @('exec', $Name, 'rm', '-rf', '/root/.ssh')
+    $copy = Invoke-Captured $Docker @('cp', $SshDirectory, "${Name}:/root/.ssh")
+    if ($copy.ExitCode -ne 0) {
+        Write-Warn2 "could not copy $SshDirectory into the container: $(($copy.Lines | Select-Object -Last 1))"
+        return 'SSH key not copied'
+    }
+    # -f because a directory holding only a .pub file, or only known_hosts, makes
+    # these globs match nothing, and that is not a failure worth reporting.
+    $null = Invoke-Captured $Docker @('exec', $Name, 'sh', '-c',
+        'chmod 700 /root/.ssh && chmod -f 600 /root/.ssh/* && chmod -f 644 /root/.ssh/*.pub')
+    Write-Note "SSH material copied in from $SshDirectory, private keys at mode 600"
+
+    # Verify instead of assuming. A key that is present but not registered, or
+    # not the one GitHub knows, behaves exactly like a working key until a push
+    # fails -- and a push is the expensive place to find that out. `ssh -T` exits
+    # 1 whether or not it authenticated (GitHub offers no shell), so the greeting
+    # is the signal and the exit code is not. accept-new records github.com's
+    # host key on first use rather than prompting for it: a session has no
+    # console, so a prompt there is a hang, and a hang is indistinguishable from
+    # a slow push.
+    $probe = Invoke-Captured $Docker @('exec', $Name, 'ssh', '-o', 'BatchMode=yes',
+        '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=10', '-T', 'git@github.com')
+    $greeting = $probe.Lines | Where-Object { $_ -match 'successfully authenticated' } | Select-Object -First 1
+    if ($greeting) {
+        Write-Note "github.com says: $greeting"
+        if ($identity) { return "ready to push as $identity" }
+        return 'ready to push (no git author set)'
+    }
+    Write-Warn2 "github.com did not authenticate: $(($probe.Lines | Select-Object -Last 1))"
+    Write-Warn2 'the key may not be registered there, this machine may be offline,'
+    Write-Warn2 'or a known_hosts entry for github.com may be stale'
+    return 'SSH key installed, github.com unverified'
 }
 
 <# The Docker Desktop launcher, in either install layout. #>
@@ -467,6 +580,18 @@ function Invoke-Main {
         if ($code -ne 0) { throw "docker run failed with exit code $code" }
     }
 
+    # The container is up, so the credentials can go in. This is not part of what
+    # the deployment promises -- the box is worth having without it -- which is
+    # why Sync-GitCredentials reports rather than throws, and why its verdict is
+    # repeated in the closing summary instead of only scrolling past here.
+    Write-Head 'Git credentials'
+    if ($NoGitCredentials) {
+        $gitStatus = 'skipped (-NoGitCredentials)'
+        Write-Note 'the box holds no key: it can commit, and you push from here'
+    } else {
+        $gitStatus = Sync-GitCredentials -Docker $docker -Name $ContainerName -ProjectPath $ProjectPath -SshDirectory $SshDirectory
+    }
+
     Write-Head 'Web UI'
     $url = "http://localhost:$hostPort/"
     $ready = $false
@@ -502,6 +627,7 @@ function Invoke-Main {
     Write-Host "  image     : $ImageName"
     Write-Host "  project   : $ProjectPath  (mounted at /workspace)"
     Write-Host "  harness   : $DshHome  (mounted at /dsh-home)"
+    Write-Host "  git       : $gitStatus"
     Write-Host ''
     Write-Host "  logs  : docker logs -f $ContainerName"
     Write-Host "  shell : docker exec -it $ContainerName bash"

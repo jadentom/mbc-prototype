@@ -12,12 +12,17 @@
         accepts a loopback one (the reason publishing on 127.0.0.1 is enough);
       * godot, dotnet and dsh are installed inside the container at the
         versions this project needs;
+      * the orientation file a session reads first is installed at the container
+        root, under the name the harness loads;
+      * a session can commit and push: the machine's git author is configured in
+        the container and its SSH key is installed with a mode ssh accepts;
       * the project's C# assembly builds inside the container;
       * the game boots headlessly.
 
-    Checks 1-7 are fatal; the headless game boot is reported as a warning
-    unless -Strict is given, because a prototype can legitimately fail to boot
-    for reasons that have nothing to do with the sandbox.
+    Every check is fatal except the two that depend on something outside the
+    sandbox: the headless game boot, because a prototype can legitimately fail
+    to boot for reasons that have nothing to do with the box, and the installed
+    SSH key, because a machine may simply have none. -Strict makes both fatal.
 
 .PARAMETER Port
     Host port the Web UI is published on. Must match run-sandbox.ps1's.
@@ -36,7 +41,8 @@
     Patch layer run-sandbox.ps1 should install; forwarded unchanged.
 
 .PARAMETER Strict
-    Treat the headless game-boot check as fatal too.
+    Treat the two checks that are warnings by default -- the headless game boot
+    and the installed SSH key -- as fatal too.
 
 .EXAMPLE
     .\test-sandbox.ps1
@@ -232,7 +238,35 @@ Add-Result 'dsh CLI responds' ($dsh.ExitCode -eq 0) $dshLine
 $orientation = Invoke-InContainer $docker 'test -s /AGENTS.md && test -s /README.md'
 Add-Result 'the root orientation file is installed' ($orientation.ExitCode -eq 0) '/AGENTS.md non-empty; /README.md symlink'
 
-# ── 8. the project builds ────────────────────────────────────────────────────
+# ── 8. the credentials a session pushes with ─────────────────────────────────
+
+# Private keys are identified by their content, not by their name or their mode:
+# `id_*` would miss a key named after the host it belongs to, and known_hosts and
+# config are legitimately world-readable -- a name- or mode-only rule reports
+# them as the very thing it is looking for. (Which is not hypothetical: the first
+# draft of this check counted the known_hosts file that `git ls-remote` leaves
+# behind.)
+$keys = Invoke-InContainer $docker 'find /root/.ssh -maxdepth 1 -type f -exec grep -l "PRIVATE KEY" {} + 2>/dev/null | wc -l'
+$keyCount = Get-LastLine $keys
+# Warning by default: no key on this machine is a working sandbox that cannot
+# push, which run-sandbox.ps1 already says out loud at start. -Strict asks for it
+# to be a failure instead.
+Add-Result 'an SSH key is installed in the box' ($keyCount -ne '0') "private keys in /root/.ssh: $keyCount" ([bool]$Strict)
+
+# Fatal, and the half worth asserting on its own: ssh refuses a private key
+# anyone else can read, and that is exactly what a bind mount of the host's .ssh
+# would produce -- an NTFS share reports every file as 777 -- so this is the
+# check that fails if the copy in run-sandbox.ps1 is ever replaced by a mount.
+#
+# `-print` is load-bearing: find adds its implicit print only when the expression
+# holds no other action, so with `-exec` in it find prints nothing at all and the
+# count is zero whatever the modes are. Without it this check passes on a key
+# that ssh would refuse.
+$loose = Invoke-InContainer $docker 'find /root/.ssh -maxdepth 1 -type f -exec grep -q "PRIVATE KEY" {} \; -perm /077 -print 2>/dev/null | wc -l'
+$looseCount = Get-LastLine $loose
+Add-Result 'no private key is readable beyond root' ($looseCount -eq '0') "private keys with group/other bits: $looseCount"
+
+# ── 9. the project builds ────────────────────────────────────────────────────
 
 Write-Host ''
 Write-Host '--- building the project inside the container (this is the slow one) ---' -ForegroundColor Cyan
@@ -245,7 +279,7 @@ Add-Result 'MbcPrototype.csproj builds in the container' ($build.ExitCode -eq 0)
 $assembly = Invoke-InContainer $docker 'ls -1 /workspace/.godot/mono/temp/bin/Debug/MbcPrototype.dll'
 Add-Result 'the built assembly is where Godot loads it from' ($assembly.ExitCode -eq 0) (Get-LastLine $assembly)
 
-# ── 9. the game boots headlessly ─────────────────────────────────────────────
+# ── 10. the game boots headlessly ────────────────────────────────────────────
 
 $boot = Invoke-InContainer $docker 'cd /workspace && godot --headless --path /workspace --quit-after 60' 300
 if ($boot.ExitCode -ne 0) {
