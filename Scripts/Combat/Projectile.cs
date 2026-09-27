@@ -32,7 +32,11 @@ public partial class Projectile : CharacterBody3D
 	private void Deploy()
 	{
 		var newBase = BaseScene.Instantiate<BaseNode>();
-		newBase.Position = GlobalPosition; 
+		// Set before AddChild: the node's _Ready() measures the cable to its
+		// parent from this transform. The spawn container sits at the origin, so
+		// the local transform is the global one (the same assumption SpawnRoot
+		// makes when it places a root).
+		newBase.Position = GlobalPosition;
 
 		// Only link into the chain while the creator is still alive. The new node
 		// joins the creator's chain (so it belongs to the same combatant and keeps
@@ -46,8 +50,13 @@ public partial class Projectile : CharacterBody3D
 		// A node whose creator died while the shot was in flight has no chain to
 		// join: it spawns unowned, so it neither belongs to a combatant nor keeps
 		// a defeated chain alive (destroying a chain's root is that chain's loss).
-		
-		GetTree().Root.AddChild(newBase);
+
+		// Parented inside the scene, never the tree root: this node outlives the
+		// match otherwise — a reload frees the scene alone — and would come back
+		// as a stale, unselectable leftover after the game-over restart.
+		Node parent = GameManager.Instance?.SpawnContainer;
+		if (parent == null) parent = GetTree().Root;
+		parent.AddChild(newBase);
 
 		QueueFree();
 

@@ -54,9 +54,9 @@ public static class AmmoLauncher
 		TurnEvent turnEvent = new TurnEvent(description ?? (ammo == AmmoType.Node ? "Node projectile" : "Bomb"));
 
 		var instance = scene.Instantiate<Node3D>();
-		// Position, not GlobalPosition: a node that is not in the tree yet has no
-		// global transform to read, and the ammo is parented to the tree root
-		// (never a Node3D), so its local transform is its global one anyway.
+		// Set before AddChild: a node that is not in the tree yet has no global
+		// transform to read, and the spawn container sits at the origin, so the
+		// local transform is the global one.
 		instance.Position = origin.GlobalPosition + Vector3.Up * 2.0f;
 
 		// TODO: Switch this to inheritance and use an interface
@@ -78,7 +78,17 @@ public static class AmmoLauncher
 			return;
 		}
 
-		gm.GetTree().Root.AddChild(instance);
+		// Parented inside the scene, never the tree root: a reload of the scene
+		// (how a finished match is restarted) frees the scene alone, so ammo
+		// still in flight when the match ends would otherwise survive the restart.
+		Node parent = gm.SpawnContainer;
+		if (parent == null)
+		{
+			GD.PushError("AmmoLauncher: no container to parent the ammo under.");
+			instance.QueueFree();
+			return;
+		}
+		parent.AddChild(instance);
 
 		// Committing the turn: locks control until every event resolves.
 		gm.RegisterTurnEvent(turnEvent);

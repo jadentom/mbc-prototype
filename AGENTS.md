@@ -59,7 +59,8 @@ the player's `PlayerCombatant` (adopting the scene's `BaseNode` as its root)
 and spawns the enemy's root at runtime — `EnemyStartScreensRight` screen widths
 to the right of the player's. Spawned roots are parented under
 `GameManager.NodeContainer` (the tree root and the scene root both reject
-`AddChild` while the scene is still setting up).
+`AddChild` while the scene is still setting up), as is everything else spawned
+during a match — see *Key mechanics & invariants*.
 
 The minimap is **built at runtime** by `GameManager.CreateMinimap()` (a
 `SubViewport` + top-down camera + `TextureRect` in the bottom-right corner),
@@ -140,6 +141,15 @@ Team/targeting details:
 - **Enemy tuning** (all exported on `GameManager`): `EnemyStartScreensRight`
   (default 2), `EnemyThinkTime`, `EnemyAimSpreadDegrees` (180 = fully random),
   `EnemyMinPower`/`EnemyMaxPower`, `CenterCameraOnActingCombatant`.
+- **Nothing spawned during a match is parented to the tree root.** Chain roots,
+  ammo in flight, explosions and the nodes ammo deploys all go under
+  `GameManager.SpawnContainer` (`NodeContainer`), and the player's starting
+  node is looked up through `GameManager.SceneRoot` — both *inside* the scene.
+  Restarting a finished match reloads the scene, and a reload frees the scene
+  alone: a node left under the tree root outlives the match, comes back as a
+  stale node nobody can select (its chain is gone), and — being the first
+  `BaseNode` in the tree — would be adopted as the *next* match's player root,
+  which then spawns the enemy and the camera offset off the wrong place.
 
 ## Camera: centering, panning, minimap
 

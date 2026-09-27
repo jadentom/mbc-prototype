@@ -96,6 +96,37 @@ public partial class GameManager : Node
 	/// </summary>
 	public Node3D NodeContainer { get; private set; }
 
+	/// <summary>
+	/// Where everything spawned during a match is parented: ammo in flight,
+	/// explosions, and the chain nodes ammo deploys (a combatant's own root is
+	/// parented under <see cref="NodeContainer"/> directly).
+	///
+	/// Always a node *inside the scene*, never the tree root: restarting a
+	/// finished match reloads the scene, and a reload frees the scene alone. A
+	/// node parented to the tree root outlives the match and leaks into the next
+	/// one — visible, unselectable, owned by a chain that no longer exists, and
+	/// the first "BaseNode" in the tree, so the new match would adopt it as the
+	/// player's starting node (see <see cref="SceneRoot"/>).
+	///
+	/// Falls back to the tree root only before the match has been set up.
+	/// </summary>
+	public Node SpawnContainer
+	{
+		get
+		{
+			if (IsInstanceValid(NodeContainer)) return NodeContainer;
+			return GetTree()?.Root;
+		}
+	}
+
+	/// <summary>
+	/// The subtree this match lives in — the scene root a restart replaces
+	/// (GameManager is a direct child of it). The player's starting node is
+	/// looked up from here rather than from the tree root, so a node that lives
+	/// outside the scene can never be mistaken for part of the match.
+	/// </summary>
+	private Node SceneRoot => GetParent() ?? GetTree().Root;
+
 	/// <summary>Current round number. Starts at 1 and advances when the rotation wraps around.</summary>
 	public int CurrentTurn { get; private set; } = 1;
 
@@ -161,7 +192,7 @@ public partial class GameManager : Node
 		// 1. Setup Camera Offset
 		if (MainCamera != null)
 		{
-			var startBase = GetTree().Root.FindChild("BaseNode", true, false) as Node3D;
+			var startBase = SceneRoot.FindChild("BaseNode", true, false) as Node3D;
 			if (startBase != null)
 				_cameraOffset = MainCamera.GlobalPosition - startBase.GlobalPosition;
 			else
@@ -222,7 +253,10 @@ public partial class GameManager : Node
 		AddChild(_playerCombatant);
 		_combatants.Add(_playerCombatant);
 
-		var startBase = GetTree().Root.FindChild("BaseNode", true, false) as BaseNode;
+		// Looked up inside this scene (never the tree root) so a node left
+		// outside it — anything that outlived an earlier match — cannot be
+		// adopted as the player's root.
+		var startBase = SceneRoot.FindChild("BaseNode", true, false) as BaseNode;
 		if (startBase != null)
 		{
 			// Adopted before the node's _Ready runs (GameManager is ready first, so

@@ -175,7 +175,12 @@ public partial class BaseNode : StaticBody3D
 		if (ExplosionScene != null)
 		{
 			var explosion = ExplosionScene.Instantiate<Node3D>();
-			GetTree().Root.AddChild(explosion);
+
+			// Parented inside the scene, never the tree root: an explosion still
+			// playing when the match ends would outlive the restart's scene reload.
+			Node parent = GameManager.Instance?.SpawnContainer;
+			if (parent == null) parent = GetTree().Root;
+			parent.AddChild(explosion);
 			explosion.GlobalPosition = this.GlobalPosition;
 		}
 
