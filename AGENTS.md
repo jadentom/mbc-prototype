@@ -17,6 +17,14 @@ prototype built with **Godot 4.5.1 (C#/.NET)**. Read this before editing.
 - Ground is a 10000×10000 plane (effectively infinite play space). The play
   area that matters today is around the origin; there is **no real map size
   yet**.
+- **This is a prototype for *MoonBase Commander* (2002), and there is a
+  roadmap for reaching feature parity with it**: [docs/parity](docs/parity/README.md)
+  is the plan and the architectural blockers, and
+  [docs/parity/units.md](docs/parity/units.md) is the original's eighteen units,
+  energy economy and world rules transcribed from the official manual. Read the
+  plan before starting work that the roadmap already sequences — it names the
+  foundations (data-driven unit definitions, the subtractive armor model, the
+  cord graph, the energy/round loop) that later features depend on.
 
 ## Build & run
 
