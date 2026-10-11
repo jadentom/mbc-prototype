@@ -53,7 +53,9 @@ guessing. Read those before treating a number as final.
 ## The eighteen units
 
 Each faction has the same eighteen units with the same statistics and different
-art. **Level** is the energy cost.
+art — the four factions are purely cosmetic, so **this project ships one set of
+units and no faction art** (see [README.md](README.md), *Non-goals*). **Level**
+is the energy cost.
 
 ### Level 1 (1 energy)
 
@@ -64,14 +66,7 @@ art. **Level** is the energy cost.
 | **Bridge** | 3 | — | The only structure that lands safely **in water**, turning that area into safe flat land. Every rule that applies to flat land applies on top of a Bridge. If a Bridge is destroyed, any unit or cord on it drops into the water and is destroyed. |
 | **Cluster Bomb** | — | 1.5 × 3 | Splits into three smaller Bomblets at the apex of its flight arc. Each Bomblet behaves as a weaker Bomb. Its real value is drawing anti-air fire. |
 | **Repair** | 1 | heals 1 | Restores **1 Armor point** to any unit it hits — including enemy units, since the manual does not restrict it to friendly targets. |
-| **Tower** | 3 | — | Expands your field of view so you can see more of the map while Fog is active. |
-
-> **Note — Tower.** The manual gives the Tower only a vision function. The
-> *Strategies* section separately refers to penning Crawlers "behind a Tower
-> cord", which implies the Tower also sits in and extends the cord network (and
-> therefore build reach). Confirm against the shipped game or a frame-accurate
-> source before implementing it as cord-extending rather than vision-only.
-
+| **Tower** | 3 | — | Sits in the cord network, extending the network's reach, and expands your field of view so you can see more of the map while Fog is active. |
 ### Level 3 (3 energy)
 
 | Unit | Armor | Damage | Function and rules |
@@ -149,8 +144,13 @@ you may build, and it is what the destruction cascade propagates along.
 - Unit stats, energy economy, cord rules, destruction cascade, terrain states,
   wrapping, wind, fog and the objective: **official manual, pages 19–26** — high
   confidence, transcribed directly.
-- Tower's cord function and Repair's friendly/enemy targeting: **inferred or
-  unstated** — flagged above, verify before implementing.
+- **The Tower's cord function** is confirmed by the project owner and is not a
+  manual-stated rule: the manual gives the Tower only a vision function, while
+  the *Strategies* section refers to penning Crawlers "behind a Tower cord".
+  Treat the cord-extending behaviour as **correct but unsourced** — it is design
+  intent here, not a transcription.
+- Repair's friendly/enemy targeting is **unstated** by the manual: it says "any
+  unit it hits" without restricting it, which is read as including enemies.
 - Numbers the manual never gives (launch ranges, cord lengths, pool sizes,
   weapon flight arcs, bot personalities, terrain heights): **unknown**. These
   have to be tuned to feel, or recovered from the shipped data files.

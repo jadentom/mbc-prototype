@@ -25,7 +25,7 @@ they are worth reaching in this order, because each one is useful on its own:
 | bar | meaning | reached when |
 | --- | --- | --- |
 | **Rules parity** | same mechanics, same numbers, same edge cases | a player's expectations about *what happens* are never wrong |
-| **Content parity** | all 18 units, 4 factions, the terrain and pool content | a player's favourite strategy exists |
+| **Content parity** | all 18 units, the terrain and pool content | a player's favourite strategy exists |
 | **Mode parity** | skirmish setup, challenge missions, replays, map editor, multiplayer | a player can play the way they used to |
 | **Presentation parity** | HUD layout, key commands, audio, damage feedback | the game *reads* the same at a glance |
 
@@ -39,11 +39,19 @@ it literally would be waste:
 | GameSpy Arcade matchmaking | Godot high-level multiplayer (ENet) + LAN discovery |
 | DirectX 8.1, 640×480, CD install, AutoPlay | nothing — we are a Godot 4.5.1 build |
 | Pre-rendered 2D sprites of 3D models | the existing 3D pipeline |
-| The original's music/voice assets | *not redistributable.* Reproduce the dynamic-music **behaviour** (intensity tracks game state) with new audio, or ship silence |
+| **The four factions** (NiceCo, DeWulf Industrial, System7, Team Alpha) | **skipped.** They are cosmetic — every faction has the same eighteen units with the same statistics and different art. Player colours stay, because four players have to be told apart |
+| **Music and voice** | **skipped.** Placeholder **SFX only** — no music, no voice commentary, no dynamic music system |
+| The original's audio assets | *not redistributable*; placeholders are ours |
 
 Two things are deliberately **not** non-goals even though they are expensive,
 because they are load-bearing for the feel of the game: **the wrapping map** and
 **fog of war**. Both change how every other rule is played.
+
+Dropping factions and music does **not** drop the features they carried:
+**challenge mode** still ships its sixteen missions (they were framed as a tour
+of the four factions, but the missions themselves are the content), and the
+**commentary toggle and volume channels** are simply not needed once there is
+nothing to commentate with.
 
 ### Where numbers are unknown
 
@@ -80,7 +88,8 @@ closes; the **size** column is a rough ordering device, not a promise.
 | **Map editor** | size, 4 terrain states, pools, starting positions, save/load/share | none | **L** |
 | **Replays / stats** | Replay Theatre + 7-stat game summary | none; no serialization of game state at all | **L** |
 | **HUD / keys** | energy bar, build menu, HUD bar, D/R/C/N/P/L/A/Tab keys | power bar, two ammo icons, turn label, win/lose labels; `fire_shot`, `aim_left/right`, `switch_ammo_next/previous` | **M** |
-| **Factions / colors** | 4 factions × 6 colors | none | **S** |
+| **Factions / colors** | 4 factions × 6 colors | none | **S** — factions skipped, colours kept |
+| **Audio** | dynamic music, voice commentary, SFX and 4 volume channels | nothing at all; the repo has no audio assets | **S** — placeholder SFX only |
 
 ### The architectural blockers
 
@@ -208,7 +217,12 @@ The spatial rules that make the map a puzzle.
   **cord nodes** at intervals (not units; no damage; Power Spike only).
 - **Build legality**: a launch is refused if the resulting cord would overlap an
   existing cord, or if the target site is outside cord reach.
-- **Reach** determined by the Hub's/Tower's network and by terrain height.
+- **Reach** determined by the Hub's/Tower's network and by terrain height. The
+  **Tower is what extends the network**: it is a cord-carrying structure you
+  chain outward to push your build reach past where the Hub alone can throw.
+  (Confirmed as design intent by the project owner; the manual documents only
+  the Tower's vision function — see [units.md](units.md), *Sources and
+  confidence*.)
 - **Hub destruction cascade** over the cord graph — destroying a Hub destroys
   everything built by it, recursively, including other Hubs. Note the current
   implementation waits **1.0 s per generation** (`BaseNode.Destroy()`), so a
@@ -274,9 +288,6 @@ cord, the Mine's arming conditions, the Anti-Air's one-turn reload, the Virus
 hopping the cord network one unit per cycle, and the Shield passing friendlies
 while destroying enemies.
 
-> **Decision needed — Tower.** The manual gives the Tower vision only, but the
-> strategy section refers to a "Tower cord". Resolve before implementing.
-
 **Exit criteria:** every unit in [units.md](units.md) is buildable and behaves
 as described, including its stated exceptions.
 
@@ -292,14 +303,14 @@ as described, including its stated exceptions.
 **Exit criteria:** a fog game is genuinely about scouting, and wind visibly
 changes where a maximum-power shot lands.
 
-### M6 — Match setup, factions, teams and bots
+### M6 — Match setup, teams and bots
 
-- **Game setup screen**: faction (NiceCo, DeWulf Industrial, System7, Team
-  Alpha — same units, different art), colour (six, unique per player), player
-  name, BOT slots (**up to three of ten, playing differently**), team assignment
-  (teammates share line of sight and their units cooperate — an ally's Anti-Air
-  will not shoot your projectiles — but they never share energy or control each
-  other's units).
+- **Game setup screen**: colour (unique per player, so four players can be told
+  apart), player name, BOT slots (**up to three of ten, playing differently**),
+  team assignment (teammates share line of sight and their units cooperate — an
+  ally's Anti-Air will not shoot your projectiles — but they never share energy
+  or control each other's units). **No faction selection** — factions are
+  cosmetic and skipped (see *Non-goals*).
 - **Lift the two-combatant assumption** in `GameManager.CreateCombatants()`:
   arbitrary players with teams, and the defeat rule already generalises
   (`EvaluateGameOver()` is team-aware; the rotation is not).
@@ -314,9 +325,12 @@ correct conclusion and produces a winner.
 
 ### M7 — Challenge mode and the map editor
 
-- **Challenge mode**: 16 missions across the four factions, with a progression
-  screen and per-mission bonuses for efficiency. Needs the mission-definition
-  format from M0.4 plus AI scripting hooks.
+- **Challenge mode**: 16 missions with a progression screen and per-mission
+  bonuses for efficiency. The original framed these as a tour of the four
+  factions (NiceCo → DeWulf → System7 → Team Alpha); with factions skipped they
+  are simply a sixteen-mission ladder, which changes the framing and not the
+  content. Needs the mission-definition format from M0.4 plus AI scripting
+  hooks.
 - **Map editor**: map size, the four terrain states, energy pools of varying
   size (a bigger pool fits more Collectors), **starting positions** (the
   original enforces placing the 4/3/2-player icon sets for a valid map),
@@ -376,8 +390,11 @@ and the summary numbers are right.
   Camera**; plus Auto Scroll and Auto Hub Select. (All default **OFF** in the
   original — keep those defaults.)
 - **Damage feedback**: damage bar and the **smoke colour that encodes severity**.
-- **Audio**: SFX/music/interface/voice volumes, commentary toggle, and the
-  **dynamic music system** that tracks how the game is going.
+- **Audio**: **placeholder SFX only** — launch, impact, explosion, anti-air
+  fire, structure destroyed, UI click — plus **one master volume** and a mute.
+  No music, no voice, no commentary, no dynamic-music system, and therefore no
+  per-channel volume mixing (see *Non-goals*). Pick placeholders that are short
+  and neutral so they can be replaced without re-tuning anything.
 
 **Exit criteria:** a returning player's hands work without being told.
 
@@ -463,7 +480,7 @@ measured. **This table is expected to change; nothing else in the plan is.**
 | **Wrapping maps touch everything.** | Discovered late, it invalidates distance/targeting/camera code. | It is in M3, before units and modes; do the world↔map maths once, centrally. |
 | **Determinism retrofitted.** | Replays and multiplayer both break subtly. | M0.5, before any of them. |
 | **Unknown numbers.** | "Parity" arguments with no referee. | Tuning table, measured against the original, kept in one resource. |
-| **Original assets.** | Copyright. | Behaviour and layout parity only; new art and audio. |
+| **Original assets.** | Copyright. | Behaviour and layout parity only; new art, placeholder audio. |
 | **`GameManager` god object.** | Every feature edits one 1355-line file and conflicts. | M0.6. |
 
 ---
@@ -499,8 +516,8 @@ Track progress here. Each line is a claim that can be demonstrated.
 - [ ] Teams (shared line of sight, cooperating units, no shared energy)
 
 **Modes**
-- [ ] Skirmish setup: faction, colour, name, bots, teams, map
-- [ ] Challenge mode: 16 missions, 4 factions
+- [ ] Skirmish setup: colour, name, bots, teams, map
+- [ ] Challenge mode: 16 missions
 - [ ] Replay Theatre: record, save, play/pause, per-player view, near-transparent fog
 - [ ] Game summary: Units, Energy, Shots, Hits, Destroyed, Accuracy, Bonus
 - [ ] Map editor: size, terrain, pools, start positions, save/load
@@ -515,7 +532,7 @@ Track progress here. Each line is a claim that can be demonstrated.
 - [ ] Keys: D, R, C, N, P, L, A, Tab, remappable
 - [ ] Track In / Track Out, Smart Camera, Auto Return, Auto Scroll, Auto Hub Select (all default off)
 - [ ] Damage bar and smoke-severity feedback
-- [ ] Dynamic music, commentary toggle, four volume channels
+- [ ] Placeholder SFX (launch, impact, explosion, anti-air, destruction, UI) with a master volume
 
 ---
 
