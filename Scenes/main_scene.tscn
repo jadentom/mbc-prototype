@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" uid="uid://dvmv4ifdu3jbn" path="res://Scripts/Core/GameManager.cs" id="1_0f027"]
 [ext_resource type="Texture2D" uid="uid://b285731ydsbg2" path="res://Assets/opengameart_grass.png" id="1_nfk4m"]
-[ext_resource type="PackedScene" uid="uid://c6xgkfb15ktwi" path="res://Scenes/base_node.tscn" id="2_2c62f"]
+[ext_resource type="PackedScene" uid="uid://c6xgkfb15ktwi" path="res://Scenes/structure.tscn" id="2_2c62f"]
 [ext_resource type="Resource" path="res://Resources/Units/hub.tres" id="2_hub01"]
 [ext_resource type="Resource" path="res://Resources/Units/unit_catalog.tres" id="3_cat01"]
 [ext_resource type="Resource" path="res://Resources/Rules/match_rules.tres" id="4_rule01"]
@@ -52,7 +52,7 @@ RestartLabel = NodePath("../UI/RestartLabel")
 Catalog = ExtResource("3_cat01")
 Rules = ExtResource("4_rule01")
 
-[node name="BaseNode" parent="." instance=ExtResource("2_2c62f")]
+[node name="Structure" parent="." instance=ExtResource("2_2c62f")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 0)
 Definition = ExtResource("2_hub01")
 

@@ -140,14 +140,14 @@ public partial class Bomb : CharacterBody3D, ILaunchedAmmo
 
 		// A body with several collision shapes comes back once per shape. Damage
 		// must not depend on how many shapes a node happens to be built from.
-		var hitNodes = new HashSet<BaseNode>();
+		var hitNodes = new HashSet<Structure>();
 
 		foreach (Godot.Collections.Dictionary hit in GetWorld3D().DirectSpaceState.IntersectShape(query))
 		{
-			// AsGodotObject, not As<BaseNode>: the result holds plain bodies too
+			// AsGodotObject, not As<Structure>: the result holds plain bodies too
 			// (the ground), and a hard cast on one of those throws instead of
 			// failing to match.
-			if (hit["collider"].AsGodotObject() is not BaseNode node) continue;
+			if (hit["collider"].AsGodotObject() is not Structure node) continue;
 			// A node already destroyed this frame is still in the physics space
 			// (QueueFree lands at the end of the frame), so check the flag too.
 			if (!IsInstanceValid(node) || node.IsDestroyed) continue;

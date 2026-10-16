@@ -15,7 +15,7 @@ namespace MbcPrototype.Combat;
 /// </summary>
 public readonly struct AmmoLaunch
 {
-	public AmmoLaunch(UnitDefinition unit, MatchRules rules, BaseNode origin, Vector3 velocity, TurnEvent turnEvent)
+	public AmmoLaunch(UnitDefinition unit, MatchRules rules, Structure origin, Vector3 velocity, TurnEvent turnEvent)
 	{
 		Unit = unit;
 		Rules = rules;
@@ -31,7 +31,7 @@ public readonly struct AmmoLaunch
 	public MatchRules Rules { get; }
 
 	/// <summary>The structure the shot was launched from.</summary>
-	public BaseNode Origin { get; }
+	public Structure Origin { get; }
 
 	/// <summary>
 	/// Initial velocity, in world units per second: aim direction times the

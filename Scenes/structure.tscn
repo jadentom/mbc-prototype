@@ -1,6 +1,6 @@
 [gd_scene load_steps=8 format=3 uid="uid://c6xgkfb15ktwi"]
 
-[ext_resource type="Script" uid="uid://cpjgc6sep8clf" path="res://Scripts/Core/BaseNode.cs" id="1_a0hpm"]
+[ext_resource type="Script" uid="uid://cpjgc6sep8clf" path="res://Scripts/Core/Structure.cs" id="1_a0hpm"]
 [ext_resource type="PackedScene" path="res://Scenes/explosion.tscn" id="2_g2ppn"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_uqfem"]
@@ -23,7 +23,7 @@ height = 0.02
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_jo2l5"]
 albedo_color = Color(0, 1, 1, 1)
 
-[node name="BaseNode" type="StaticBody3D"]
+[node name="Structure" type="StaticBody3D"]
 script = ExtResource("1_a0hpm")
 ExplosionScene = ExtResource("2_g2ppn")
 metadata/_edit_group_ = true

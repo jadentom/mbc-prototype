@@ -62,7 +62,7 @@ World (Node3D)
 ├── Ground (StaticBody3D, 10000x10000 plane)
 ├── Camera3D            # orthographic (projection=1), size=30, ~45° tilt
 ├── GameManager (Node)  # GameManager.cs — the main controller/singleton
-├── BaseNode            # the player's starting node (base_node.tscn), Definition = hub
+├── Structure           # the player's starting structure (structure.tscn), Definition = hub
 └── UI (CanvasLayer)
     ├── FireStrengthBar (ProgressBar)      # bottom, full width
     ├── Label                              # control hints
@@ -76,10 +76,10 @@ World (Node3D)
 ```
 
 Combatants are **not** in the scene: `GameManager.CreateCombatants()` builds
-the player's `PlayerCombatant` (adopting the scene's `BaseNode` as its root)
+the player's `PlayerCombatant` (adopting the scene's `Structure` as its root)
 and spawns the enemy's root at runtime — `EnemyStartScreensRight` screen widths
 to the right of the player's. Spawned roots are parented under
-`GameManager.NodeContainer` (the tree root and the scene root both reject
+`GameManager.StructureContainer` (the tree root and the scene root both reject
 `AddChild` while the scene is still setting up), as is everything else spawned
 during a match — see *Key mechanics & invariants*.
 
@@ -92,10 +92,11 @@ not stored in the scene. See [docs/camera](docs/camera/README.md).
 | File | Role |
 | --- | --- |
 | `Scripts/Core/GameManager.cs` | Singleton (`GameManager.Instance`), combatant rotation + turn flow, aiming/firing for the player, camera (centering, **edge panning**, **minimap** — see [docs/camera](docs/camera/README.md)). |
-| `Scripts/Core/BaseNode.cs` | Chain node: health, highlight ring, cable to parent, health-bar SubViewport sprite (a divider line per point of health), destruction cascade. Knows its owning `OwnerChain`. |
+| `Scripts/Core/Structure.cs` | A unit on the map: hit points from its definition, highlight ring, health-bar SubViewport sprite (a divider line per point of health), the cords it hangs from and anchors, destruction cascade. Knows its owning `OwnerChain`. |
+| `Scripts/Core/Cord.cs` | **The link in the network**: the geometry between two structures (parent, child, length) plus the cable mesh. Built by the child structure in `_Ready`, parented under it, and what the destruction cascade runs down. |
 | `Scripts/Core/PlayerCombatant.cs` | The human's combatant: a `NodeChainCombatant` whose aim/charge/fire comes from input in `GameManager`. |
 | `Scripts/TurnSystem/Combatant.cs` | Abstract turn participant (team, defeat rule, `BeginTurn`/`EndTurn`). The rotation only ever talks to this. |
-| `Scripts/TurnSystem/NodeChainCombatant.cs` | Combatant built from a node chain: node registry, root lookup, defeat check, `Launch()`, and the `RootUnit` definition its root spawns with. |
+| `Scripts/TurnSystem/NodeChainCombatant.cs` | Combatant built from a chain of structures: structure registry, root lookup (`FindRootStructure()`, which follows the cords), defeat check, `Launch()`, and the `RootUnit` definition its root spawns with. |
 | `Scripts/Enemies/EnemyCombatant.cs` | The AI enemy: plans one action per turn (working through the catalog's buildable units), random aim/power, fires after `ThinkTime`. |
 | `Scripts/Units/UnitDefinition.cs` | **What a unit is**: the resource holding its numbers — level/energy cost, hit points, damage, blast radii, vision, build permission, icon, and the ammo scene. It replaces the old `AmmoType` enum. |
 | `Scripts/Units/UnitCatalog.cs` | The roster: the one list of units the HUD, the launcher and the AI read. `Find(id)`, `Buildable`, `Validate()`. |
@@ -104,8 +105,8 @@ not stored in the scene. See [docs/camera](docs/camera/README.md).
 | `Scripts/Combat/AmmoLauncher.cs` | The single launch path for both sides: takes a `UnitDefinition`, instantiates its scene, hands it an `AmmoLaunch`, registers the `TurnEvent`. |
 | `Scripts/Combat/ILaunchedAmmo.cs` | The behaviour interface every ammo scene's root implements — what replaced the launcher's `if (instance is Projectile) … else if (instance is Bomb)` chain. |
 | `Scripts/Combat/AmmoLaunch.cs` | The struct a shot is configured with: unit, match rules, origin, velocity, turn event. |
-| `Scripts/Combat/Projectile.cs` | Ammo: a ballistic body that deploys a `BaseNode` carrying its unit's definition where it lands, and resolves a `TurnEvent`. |
-| `Scripts/Combat/Bomb.cs` | Ammo: a ballistic body that detonates on contact and damages every `BaseNode` in its unit's blast radii (see *Unit data & the blast*), resolving a `TurnEvent`. |
+| `Scripts/Combat/Projectile.cs` | Ammo: a ballistic body that deploys a `Structure` carrying its unit's definition where it lands, and resolves a `TurnEvent`. |
+| `Scripts/Combat/Bomb.cs` | Ammo: a ballistic body that detonates on contact and damages every `Structure` in its unit's blast radii (see *Unit data & the blast*), resolving a `TurnEvent`. |
 | `Scripts/Combat/BlastVisual.cs` | A blast's visuals: expanding translucent spheres over the damage radii, plus a ground marker (disc + a ring per radius) showing where they landed. Built in code, spawned by `Bomb`. |
 | `Scripts/TurnSystem/TurnEvent.cs` | One unit of turn resolution; the turn ends when all pending events resolve. |
 | `Scripts/World/PoolField.cs` | The map's purple pools: a fixed, grid-free scatter over the ground, one per-frame loop that pulses them all, and the pool queries future collision checks will use. |
@@ -143,7 +144,7 @@ Resources/Rules/match_rules.tres    # the match's global numbers (blast falloff 
   see everything a unit has.
 - The `hub.tres`/`bomb.tres` split is also where hit points live (§M0.2): a
   structure's hit points are its definition's `HitPoints`, and there is no longer
-  one number for every node.
+  one number for every structure.
 
 ## Combatants & turns
 
@@ -154,8 +155,8 @@ Authoritative flow, all in `GameManager`:
   second enemy, or a non-node-based one, means deriving from `Combatant` (not
   necessarily `NodeChainCombatant`) and adding it there with another `Team`.
 - `StartTurn()` gives the turn to one combatant: a player-controlled one gets
-  `IsPlayerTurn = true` and a fresh `SelectNode()`; an AI one gets
-  `IsPlayerTurn = false`, the camera centered on its action node, and
+  `IsPlayerTurn = true` and a fresh `SelectStructure()`; an AI one gets
+  `IsPlayerTurn = false`, the camera centered on its action structure, and
   `BeginTurn()`.
 - `CompleteTurn()` runs when the pending-event list drains: it ends the acting
   combatant's turn, evaluates the match, and otherwise `AdvanceTurn()`s.
@@ -163,8 +164,8 @@ Authoritative flow, all in `GameManager`:
   call `GameManager.EndIdleTurn()`, otherwise the rotation would wait forever.
 - Win/lose: `EvaluateGameOver()` ends the match when a whole `Team` has no
   combatant left that can act — `VICTORY` if only the player's team is left,
-  `DEFEAT` otherwise. Because destroying a root cascades through its whole
-  chain, "the enemy's root node was destroyed" is exactly this check.
+  `DEFEAT` otherwise. Because destroying a root cascades down its cords through
+  the whole chain, "the enemy's root was destroyed" is exactly this check.
 - `CurrentTurn` counts **rounds** (it advances when the rotation wraps), and
   the turn label shows the round plus whose move it is.
 - Game over: `_UnhandledInput` restarts the match on any key/click by
@@ -174,29 +175,39 @@ Authoritative flow, all in `GameManager`:
 Team/targeting details:
 
 - `Combatant.Team` (player 0, enemy 1) decides who may target whom; the AI
-  picks the nearest hostile node and fires from its own node closest to it, so
-  its chain creeps toward the player.
-- `BaseNode.OwnerChain` is set **before** the node enters the tree (by the
+  picks the nearest hostile structure and fires from its own structure closest to
+  it, so its chain creeps toward the player.
+- `Structure.OwnerChain` is set **before** the structure enters the tree (by the
   spawning combatant, or by the projectile that deployed it) so `_Ready` can
-  register it with the right chain. `SelectNode()` only accepts the player's
+  register it with the right chain. `SelectStructure()` only accepts the player's
   own chain, so clicks can't hijack the enemy's.
-- A node deployed by a projectile whose creator died mid-flight spawns
-  **unowned**: it belongs to no combatant and keeps no defeated chain alive.
+- A structure deployed by a projectile whose creator died mid-flight spawns
+  **unowned**: it belongs to no combatant and keeps no defeated chain alive — and
+  it hangs from nothing, so it is a root with no chain.
+- **The chain is cords, not parent pointers.** A structure that was launched sets
+  `ParentStructure` *before* it enters the tree; its `Cord` is built in its
+  `_Ready` (`Cord.Connect`), because the cable is measured between two world
+  positions and both ends have to be in the tree. The cord is parented under the
+  structure that hangs from it, so it dies with that structure, and it is what
+  `NodeChainCombatant.FindRootStructure()` (and therefore the defeat check) reads:
+  a structure with no live cord above it is a root. Do not re-derive the link from
+  `ParentStructure` — the cord is the link (docs/parity M0.3).
 
 ## Key mechanics & invariants
 
 - **Turn system**: the first `RegisterTurnEvent` commits the turn
   (`IsPlayerTurn=false`, `IsResolvingTurn=true`); control returns in
-  `CompleteTurn()` when the pending-event list drains. `BaseNode.Destroy()`
+  `CompleteTurn()` when the pending-event list drains. `Structure.Destroy()`
   registers a `TurnEvent` resolved in `_ExitTree` so destruction cascades
-  finish before the turn ends.
-- **Node destruction**: `IsDestroyed` (set immediately) vs
+  finish before the turn ends. The cascade walks `ChildCords`: destroying a
+  structure destroys everything its cords anchor, one generation per second.
+- **Destruction**: `IsDestroyed` (set immediately) vs
   `IsInstanceValid` (still true until `QueueFree` takes effect at end of
   frame). Always check the flag, never just instance validity.
-- **Selection**: `SelectNode()` only accepts a live node of the player's own
-  chain, re-centers the camera via a tween, and manages the highlight. When
-  the selection dies, control reverts to the player's chain root (a node with
-  no valid parent).
+- **Selection**: `SelectStructure()` only accepts a live structure of the
+  player's own chain, re-centers the camera via a tween, and manages the
+  highlight. When the selection dies, control reverts to the player's chain root
+  (the structure with no live cord above it).
 - **Aiming**: `aim_left`/`aim_right` rotate `_currentAimAngle` (A/D + arrow
   keys); `fire_shot` charges a power bar; release launches the current *unit*.
   The AI drives the same `_currentAimAngle`-equivalent through
@@ -209,26 +220,26 @@ Team/targeting details:
   match's `MatchRules`. A weapon damages by distance, not by what it touched:
   full `Damage` inside the unit's `DirectHitRadius`, the rules' falloff share of
   it out to the unit's `OuterRadius`, nothing past it. Distance is measured along
-  the ground (XZ) from where the shot went off, and **every** `BaseNode` in range
+  the ground (XZ) from where the shot went off, and **every** `Structure` in range
   takes the damage, the firing combatant's own chain included. `BlastVisual`
   spawns itself from `Bomb`, draws the same two radii as expanding translucent
   spheres and as discs/rings on the ground, and frees itself once its marker has
   faded.
-- **Hit points**: `BaseNode.Health` starts at `MaxHealth`, which is its
+- **Hit points**: `Structure.Health` starts at `MaxHealth`, which is its
   definition's `HitPoints` (Hub 5, Bomb none — a Bomb is not a structure).
   `TakeDamage` subtracts one point per point with **no armour threshold**, so
-  partial damage is the normal case: a Bomb (3) on a Hub (5) leaves 2. A node
-  with no definition falls back to a constant and says so — the fallback is for
-  running with no content, never the source of truth.
+  partial damage is the normal case: a Bomb (3) on a Hub (5) leaves 2. A
+  structure with no definition falls back to a constant and says so — that
+  fallback is for running with no content, never the source of truth.
 - **Nothing spawned during a match is parented to the tree root.** Chain roots,
-  ammo in flight, explosions and the nodes ammo deploys all go under
-  `GameManager.SpawnContainer` (`NodeContainer`), and the player's starting
-  node is looked up through `GameManager.SceneRoot` — both *inside* the scene.
-  Restarting a finished match reloads the scene, and a reload frees the scene
-  alone: a node left under the tree root outlives the match, comes back as a
-  stale node nobody can select (its chain is gone), and — being the first
-  `BaseNode` in the tree — would be adopted as the *next* match's player root,
-  which then spawns the enemy and the camera offset off the wrong place.
+  ammo in flight, explosions and the structures ammo deploys all go under
+  `GameManager.SpawnContainer` (`StructureContainer`), and the player's starting
+  structure is looked up through `GameManager.SceneRoot` — both *inside* the
+  scene. Restarting a finished match reloads the scene, and a reload frees the
+  scene alone: a structure left under the tree root outlives the match, comes
+  back as a stale one nobody can select (its chain is gone), and — being the
+  first `Structure` in the tree — would be adopted as the *next* match's player
+  root, which then spawns the enemy and the camera offset off the wrong place.
 
 ## Purple pools
 
@@ -287,7 +298,7 @@ a query API, and the collision checks they exist for are not written.
 - **Future collision checks** read `GameManager.Pools`: `PoolAt(position)` for a
   point (does this landing spot lie in a pool), `OverlappingPools(centre, radius,
   buffer)` for something with a size of its own (a node, an ammo round).
-- `Scenes/base_node.tscn` nodes are **radius 1.0** (doubled): the mesh, the
+- `Scenes/structure.tscn` structures are **radius 1.0** (doubled): the mesh, the
   collision shape and the highlight ring (1.4 — kept at 1.4× the node so the ring
   still shows around it). A node is therefore 2 units across, which is what
   `PoolSide` is derived from, and what `Bomb.cs`'s "about one node wide" note

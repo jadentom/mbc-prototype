@@ -7,18 +7,20 @@ using MbcPrototype.Units;
 namespace MbcPrototype.TurnSystem;
 
 /// <summary>
-/// A combatant made of a chain of <see cref="BaseNode"/>s, exactly like the
-/// player: it owns the nodes it launched, links every newly deployed node to
-/// the one that fired it, and is defeated when its chain is wiped out.
+/// A combatant made of a chain of <see cref="Structure"/>s, exactly like the
+/// player: it owns the structures it launched, every newly deployed one hangs
+/// from the structure that fired it by a <see cref="Cord"/>, and it is defeated
+/// when its chain is wiped out.
 ///
-/// Ownership is inherited: a projectile fired by one of this combatant's nodes
-/// deploys a node that belongs to the same combatant (see Projectile.Deploy),
-/// which is what keeps several chains apart on the same field.
+/// Ownership is inherited: a projectile fired by one of this combatant's
+/// structures deploys a structure that belongs to the same combatant (see
+/// Projectile.Deploy), which is what keeps several chains apart on the same
+/// field.
 /// </summary>
 public abstract partial class NodeChainCombatant : Combatant
 {
-	/// <summary>Scene used for this combatant's starting root node.</summary>
-	[Export] public PackedScene NodeScene = GD.Load<PackedScene>("res://Scenes/base_node.tscn");
+	/// <summary>Scene used for this combatant's starting root structure.</summary>
+	[Export] public PackedScene StructureScene = GD.Load<PackedScene>("res://Scenes/structure.tscn");
 
 	/// <summary>
 	/// The roster entry this combatant's chain starts from — the Hub, today —
@@ -29,101 +31,107 @@ public abstract partial class NodeChainCombatant : Combatant
 	/// </summary>
 	[Export] public UnitDefinition RootUnit;
 
-	/// <summary>The node the whole chain hangs from; null until the root is spawned.</summary>
-	public BaseNode RootNode { get; private set; }
+	/// <summary>The structure the whole chain hangs from; null until the root is in place.</summary>
+	public Structure RootStructure { get; private set; }
 
-	private readonly List<BaseNode> _nodes = new List<BaseNode>();
+	private readonly List<Structure> _structures = new List<Structure>();
 
-	/// <summary>Every node of this combatant's chain, live or not yet freed.</summary>
-	public IReadOnlyList<BaseNode> Nodes => _nodes;
+	/// <summary>Every structure of this combatant's chain, live or not yet freed.</summary>
+	public IReadOnlyList<Structure> Structures => _structures;
 
 	/// <summary>
-	/// The node this combatant acts from by default: the top of the chain, i.e.
-	/// the surviving node with no valid parent. Also used as the defeat check —
-	/// destroying a root cascades through every child, so no root means no chain.
+	/// The structure this combatant acts from by default: the top of the chain,
+	/// i.e. the surviving structure with no live cord above it. Also used as the
+	/// defeat check — destroying a root cascades down its cords to everything the
+	/// root anchors, so no root means no chain.
 	/// </summary>
-	public virtual BaseNode ActionNode => FindHighestRemainingNode();
+	public virtual Structure ActionStructure => FindRootStructure();
 
 	/// <summary>True once this combatant's chain has no root left to act from.</summary>
-	public override bool IsDefeated => FindHighestRemainingNode() == null;
+	public override bool IsDefeated => FindRootStructure() == null;
 
 	/// <summary>
-	/// Adopts an already existing node (the player's starting BaseNode, which
-	/// is placed in the scene) as this combatant's root.
+	/// Adopts a structure already standing in the scene (the player's starting
+	/// one) as this combatant's root.
 	/// </summary>
-	public void AttachRoot(BaseNode root)
+	public void AttachRoot(Structure root)
 	{
 		if (root == null) return;
 
 		// A root authored in a scene carries its own definition; the match's
 		// starting unit is the fallback for one that does not (§2). Both are set
-		// before the node's _Ready reads them for its hit points.
+		// before the structure's _Ready reads them for its hit points.
 		if (root.Definition == null) root.Definition = RootUnit;
 
-		RootNode = root;
+		RootStructure = root;
 		root.OwnerChain = this;
-		// BaseNode._Ready registers itself too; RegisterNode is idempotent.
-		RegisterNode(root);
+		// Structure._Ready registers itself too; RegisterStructure is idempotent.
+		RegisterStructure(root);
 	}
 
 	/// <summary>
-	/// Spawns this combatant's starting root node at <paramref name="position"/>
-	/// and returns it. Ownership and the unit definition are set before the node
-	/// enters the tree so its _Ready registers it with this chain and gives it
-	/// the right hit points.
+	/// Spawns this combatant's starting root structure at <paramref name="position"/>
+	/// and returns it. Ownership and the unit definition are set before the
+	/// structure enters the tree so its _Ready registers it with this chain and
+	/// gives it the right hit points.
 	/// </summary>
-	public BaseNode SpawnRoot(Vector3 position)
+	public Structure SpawnRoot(Vector3 position)
 	{
-		if (NodeScene == null)
+		if (StructureScene == null)
 		{
-			GD.PushError($"{GetType().Name} '{Name}': no NodeScene assigned, cannot spawn a root.");
+			GD.PushError($"{GetType().Name} '{Name}': no StructureScene assigned, cannot spawn a root.");
 			return null;
 		}
 
-		BaseNode root = NodeScene.Instantiate<BaseNode>();
+		Structure root = StructureScene.Instantiate<Structure>();
 		root.OwnerChain = this;
 		root.Definition = RootUnit;
 		root.Position = position;
-		RootNode = root;
+		RootStructure = root;
 
-		// Parented under the GameManager's node container (see
-		// GameManager.NodeContainer) instead of the tree root, so a combatant can
-		// spawn its root during scene setup. Falls back to the tree root.
-		Node parent = GameManager.Instance?.NodeContainer;
+		// Parented under the GameManager's structure container (see
+		// GameManager.StructureContainer) instead of the tree root, so a combatant
+		// can spawn its root during scene setup. Falls back to the tree root.
+		Node parent = GameManager.Instance?.StructureContainer;
 		if (parent == null) parent = GetTree().Root;
 		parent.AddChild(root);
 		return root;
 	}
 
-	public void RegisterNode(BaseNode node)
+	public void RegisterStructure(Structure structure)
 	{
-		if (node != null && !_nodes.Contains(node))
+		if (structure != null && !_structures.Contains(structure))
 		{
-			_nodes.Add(node);
+			_structures.Add(structure);
 		}
 	}
 
-	public void UnregisterNode(BaseNode node)
+	public void UnregisterStructure(Structure structure)
 	{
-		_nodes.Remove(node);
+		_structures.Remove(structure);
 	}
 
 	/// <summary>
-	/// Returns the topmost surviving node of the chain — the root, i.e. a node
-	/// with no valid parent. Returns null when no nodes remain.
+	/// Returns the chain's root: the surviving structure with no live cord above
+	/// it. Returns null when nothing of this chain is left.
+	///
+	/// The cord is what decides this, not the structure's parent reference: the
+	/// link is the cord (docs/parity M0.3), so a structure whose cord has gone —
+	/// or whose parent has been destroyed out from under it — is a root again.
+	/// That is what makes "no root left" mean "no chain left" while a destruction
+	/// cascade is still running.
 	/// </summary>
-	public BaseNode FindHighestRemainingNode()
+	public Structure FindRootStructure()
 	{
-		foreach (BaseNode node in _nodes)
+		foreach (Structure structure in _structures)
 		{
-			if (node == null || !IsInstanceValid(node) || node.IsDestroyed) continue;
+			if (structure == null || !IsInstanceValid(structure) || structure.IsDestroyed) continue;
 
-			bool hasValidParent = node.ParentBase != null
-				&& IsInstanceValid(node.ParentBase)
-				&& !node.ParentBase.IsDestroyed;
-			if (!hasValidParent)
+			Cord cord = structure.ParentCord;
+			bool hangsFromSomething = cord != null && IsInstanceValid(cord) && cord.IsIntact;
+			if (!hangsFromSomething)
 			{
-				return node;
+				return structure;
 			}
 		}
 		return null;
@@ -134,7 +142,7 @@ public abstract partial class NodeChainCombatant : Combatant
 	/// code path the player's shots use, and registers the TurnEvent that keeps
 	/// the turn open until the shot resolves.
 	/// </summary>
-	protected void Launch(UnitDefinition unit, BaseNode origin, float aimAngleRadians, float powerPercent)
+	protected void Launch(UnitDefinition unit, Structure origin, float aimAngleRadians, float powerPercent)
 	{
 		AmmoLauncher.Launch(unit, origin, aimAngleRadians, powerPercent, $"{DisplayName} {unit?.DisplayName ?? "?"}");
 	}

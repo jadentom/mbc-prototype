@@ -40,7 +40,7 @@ public partial class UnitDefinition : Resource
 
 	/// <summary>
 	/// Hit points of the structure this unit deploys, subtracted from integer
-	/// to integer by <see cref="MbcPrototype.Core.BaseNode.TakeDamage"/> — the
+	/// to integer by <see cref="MbcPrototype.Core.Structure.TakeDamage"/> — the
 	/// manual's <em>Armor</em> column, which is hit points and not a damage
 	/// threshold. Zero means the unit is not a structure (a Bomb has no hit
 	/// points, because nothing can shoot at it).

@@ -11,7 +11,7 @@ panning` section; the main camera is exported as `MainCamera`).
 - Its serialized `Transform3D` in `Scenes/main_scene.tscn` is easy to misread —
   verify against the runtime basis if it matters (confirmed: forward =
   `(0, -0.7071, -0.7071)`, screen-up projects to -Z on the ground).
-- `_cameraOffset` is computed in `_Ready` from the starting `BaseNode`
+- `_cameraOffset` is computed in `_Ready` from the starting `Structure`
   position (fallback `(0, 15, 15)`).
 
 ## Centering
@@ -20,7 +20,7 @@ panning` section; the main camera is exported as `MainCamera`).
   (Expo-out ease over `CameraSmoothTime` seconds) and pins `global_rotation`
   so the camera never accidentally rotates.
 - The tween is stored in `_cameraTween` and **killed whenever the player pans**,
-  so panning never fights centering. `SelectNode()` and minimap clicks both
+  so panning never fights centering. `SelectStructure()` and minimap clicks both
   route through `CenterCameraOn()`.
 
 ## Edge panning

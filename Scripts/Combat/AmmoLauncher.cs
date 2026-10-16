@@ -38,7 +38,7 @@ public static class AmmoLauncher
 	/// <param name="aimAngleRadians">Aim angle, in the aim-indicator convention.</param>
 	/// <param name="powerPercent">Charge level, 0..1, mapped onto the min/max launch force.</param>
 	/// <param name="description">Turn-event description, for debug logs (null uses the unit's name).</param>
-	public static void Launch(UnitDefinition unit, BaseNode origin, float aimAngleRadians, float powerPercent, string description)
+	public static void Launch(UnitDefinition unit, Structure origin, float aimAngleRadians, float powerPercent, string description)
 	{
 		GameManager gm = GameManager.Instance;
 		if (gm == null) return;

@@ -167,8 +167,8 @@ closes; the **size** column is a rough ordering device, not a promise.
 | system | reference | prototype today | size |
 | --- | --- | --- | --- |
 | **Objective** | destroy the opponent's **main Hub** | destroy the enemy chain's root — `GameManager.EvaluateGameOver()` treats "no root" as defeat | ✅ aligned |
-| **Cord network** | the spatial system: reach, overlap rules, cord nodes, cascade, lights | implicit parent/child links only (`BaseNode.ParentBase`/`Children`, `CableShader`). No cord geometry, no reach, no overlap test, no cord nodes | **XL** |
-| **Durability** | **hit points** per unit type (the manual's *Armor* column), damage subtracted, partial damage normal | per unit type, from the unit's own resource: `UnitDefinition.HitPoints` (Hub 5), read by `BaseNode.MaxHealth` | ✅ M0.2 |
+| **Cord network** | the spatial system: reach, overlap rules, cord nodes, cascade, lights | a link is a `Cord` object — two endpoints, its length, the cable — and the destruction cascade runs down it (M0.3). Still no cord nodes, no reach, no overlap test, no lights | **XL** |
+| **Durability** | **hit points** per unit type (the manual's *Armor* column), damage subtracted, partial damage normal | per unit type, from the unit's own resource: `UnitDefinition.HitPoints` (Hub 5), read by `Structure.MaxHealth` | ✅ M0.2 |
 | **Blast damage** | a weapon damages what it strikes **and** what is near it, with a falloff curve nobody published | the two-band model survives, but every number in it is data: radii and damage on the unit, the band share on `MatchRules`; the Bomb does the manual's 3 | ✅ M0.2 |
 | **Energy** | 1/3/7 per unit, max 35, per-round refill, income units | none | **L** |
 | **Turn model** | a turn is an energy budget; round ends when all have spent or skipped; order rotates left | one launch per turn; `CurrentTurn` counts rotation wraps | **L** |
@@ -201,7 +201,7 @@ retrofitting any of them after the content exists costs several times more.
    launcher's dispatch is the behaviour interface `ILaunchedAmmo`. Twelve units
    are twelve resources, not twelve branches.
 2. ~~**Durability is one hardcoded number and the blast curve is invented.**~~
-   **Landed in M0.2.** `BaseNode.MaxHealth` was 6 for every node, reverse
+   **Landed in M0.2.** `MaxHealth` was 6 for every node, reverse
    engineered from this repository's own bomb (three direct hits, "a half hit is
    a whole point"). Hit points now come from the unit's definition (Hub 5) and
    the blast's radii and damage from the firing unit, with the falloff between
@@ -262,7 +262,7 @@ is cheap because of it.
   the definition: **hit points per unit type**, starting from the manual's
   *Armor* column (Hub 5 — the only structure in the roster so far). The
   "MaxHealth = 6 because a half hit is a whole point" reasoning in
-  `BaseNode.cs` is deleted along with the one-number-for-everything default.
+  `Structure.cs` is deleted along with the one-number-for-everything default.
   - Damage is a **flat integer subtracted from the target's hit points**: a Bomb
     (damage 3) against a Hub (5) leaves 2, and partial damage is normal. There
     is **no armor threshold** — nothing in the original says damage that fails
@@ -274,11 +274,14 @@ is cheap because of it.
     `OuterRadius`, nothing past it) stays as the opening guess, with the radii on
     the unit definition and the band share in the match rules, and the Bomb now
     does the manual's damage 3 rather than the old 2 — its splash is 1.
-- **M0.3 — Structure vs. cord split.** `BaseNode` currently means both "a unit"
-  and "the link in the network". Split into a `Structure` (hit points, ownership,
-  vision, build permission, the cords it hangs from and anchors) and `Cord` (the
-  geometry between two structures, the cable, and later the cord nodes). This is
-  the change that makes twelve units possible.
+- **M0.3 — Structure vs. cord split.** **Landed.** `BaseNode` meant both "a
+  unit" and "the link in the network"; it is now a `Structure` (hit points,
+  ownership, the cords it hangs from and anchors) and a `Cord` (the geometry
+  between two structures, the cable, and later the cord nodes). A structure is
+  the root of a chain when no live cord hangs above it, and the destruction
+  cascade runs down its cords. Reach, overlap, lineage lights and Power Spike
+  travel now have an object to be rules *of* — which is what M2 needs, and what
+  makes twelve units possible.
 - **M0.4 — Map resource, and the development map.** A `MapDefinition` holding
   bounds, a height field, the terrain states, energy pools (with size), and the
   two **start positions** for a 1v1 match. Ship exactly one, hardcoded, as the
@@ -361,7 +364,7 @@ The spatial rules that make the map a puzzle.
     alone.)
 - **Hub destruction cascade** over the cord graph — destroying a Hub destroys
   everything built by it, recursively, including other Hubs. Note the current
-  implementation waits **1.0 s per generation** (`BaseNode.Destroy()`), so a
+  implementation waits **1.0 s per generation** (`Structure.Destroy()`), so a
   realistic network of 40-odd units would take tens of seconds to collapse and
   would hold the turn open the whole time via `TurnEvent`. The cascade needs to
   fan out concurrently, or be resolved as a graph operation with one animation

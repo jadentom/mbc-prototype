@@ -45,12 +45,12 @@ public partial class EnemyCombatant : NodeChainCombatant
 	/// The enemy always acts from the node closest to its target, so its chain
 	/// creeps toward the player instead of piling up around its own root.
 	/// </summary>
-	public override BaseNode ActionNode
+	public override Structure ActionStructure
 	{
 		get
 		{
-			BaseNode target = PickTarget(RootPosition);
-			return FindNodeClosestTo(target) ?? base.ActionNode;
+			Structure target = PickTarget(RootPosition);
+			return FindNodeClosestTo(target) ?? base.ActionStructure;
 		}
 	}
 
@@ -66,7 +66,7 @@ public partial class EnemyCombatant : NodeChainCombatant
 
 	public override void BeginTurn()
 	{
-		if (ActionNode == null)
+		if (ActionStructure == null)
 		{
 			// Nothing to act from: spend the turn instead of stalling the rotation.
 			GameManager.Instance?.EndIdleTurn();
@@ -106,7 +106,7 @@ public partial class EnemyCombatant : NodeChainCombatant
 	{
 		if (!_acting) return;
 
-		BaseNode origin = ActionNode;
+		Structure origin = ActionStructure;
 		if (origin == null)
 		{
 			// Lost the node it was aiming from: spend the turn rather than stall.
@@ -139,8 +139,8 @@ public partial class EnemyCombatant : NodeChainCombatant
 	/// </summary>
 	private float ChooseAimAngle()
 	{
-		BaseNode origin = ActionNode ?? RootNode;
-		BaseNode target = PickTarget(RootPosition);
+		Structure origin = ActionStructure ?? RootStructure;
+		Structure target = PickTarget(RootPosition);
 		if (origin == null || target == null)
 		{
 			return (float)GD.RandRange(-Mathf.Pi, Mathf.Pi);
@@ -165,8 +165,8 @@ public partial class EnemyCombatant : NodeChainCombatant
 	{
 		get
 		{
-			return (RootNode != null && IsInstanceValid(RootNode) && !RootNode.IsDestroyed)
-				? RootNode.GlobalPosition
+			return (RootStructure != null && IsInstanceValid(RootStructure) && !RootStructure.IsDestroyed)
+				? RootStructure.GlobalPosition
 				: Vector3.Zero;
 		}
 	}
@@ -176,12 +176,12 @@ public partial class EnemyCombatant : NodeChainCombatant
 	/// covers the player and, with more enemies on the field, their allies too.
 	/// Returns null when there is nothing left to shoot at.
 	/// </summary>
-	private BaseNode PickTarget(Vector3 from)
+	private Structure PickTarget(Vector3 from)
 	{
 		GameManager gm = GameManager.Instance;
 		if (gm == null) return null;
 
-		BaseNode best = null;
+		Structure best = null;
 		float bestDistance = float.MaxValue;
 
 		foreach (Combatant combatant in gm.Combatants)
@@ -189,7 +189,7 @@ public partial class EnemyCombatant : NodeChainCombatant
 			if (combatant == this || combatant.Team == Team) continue;
 			if (combatant is not NodeChainCombatant chain) continue;
 
-			foreach (BaseNode node in chain.Nodes)
+			foreach (Structure node in chain.Structures)
 			{
 				if (node == null || !IsInstanceValid(node) || node.IsDestroyed) continue;
 
@@ -206,14 +206,14 @@ public partial class EnemyCombatant : NodeChainCombatant
 	}
 
 	/// <summary>This chain's live node nearest to <paramref name="target"/> (null when it has none).</summary>
-	private BaseNode FindNodeClosestTo(BaseNode target)
+	private Structure FindNodeClosestTo(Structure target)
 	{
 		if (target == null) return null;
 
-		BaseNode best = null;
+		Structure best = null;
 		float bestDistance = float.MaxValue;
 
-		foreach (BaseNode node in Nodes)
+		foreach (Structure node in Structures)
 		{
 			if (node == null || !IsInstanceValid(node) || node.IsDestroyed) continue;
 
@@ -231,6 +231,6 @@ public partial class EnemyCombatant : NodeChainCombatant
 	/// <summary>Shows the shared aim arrow (and power meter) for the planned shot.</summary>
 	private void Preview(float powerPercent)
 	{
-		GameManager.Instance?.ShowAimPreview(ActionNode, _plannedAimAngle, powerPercent, true);
+		GameManager.Instance?.ShowAimPreview(ActionStructure, _plannedAimAngle, powerPercent, true);
 	}
 }

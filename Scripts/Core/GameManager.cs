@@ -64,9 +64,9 @@ public partial class GameManager : Node
 	// Big enough to pick out at a glance: the whole map is 475 world units across
 	// a widget a quarter of the window's shorter side.
 	[Export] public Vector2 MinimapMarkerSize = new Vector2(6, 6);
-	[Export] public Color MinimapNodeColor = new Color(0, 0, 0, 0.9f);
-	[Export] public Color MinimapEnemyNodeColor = new Color(0.9f, 0.1f, 0.1f, 0.95f);
-	[Export] public Color MinimapSelectedNodeColor = new Color(1, 1, 0, 1);
+	[Export] public Color MinimapStructureColor = new Color(0, 0, 0, 0.9f);
+	[Export] public Color MinimapEnemyStructureColor = new Color(0.9f, 0.1f, 0.1f, 0.95f);
+	[Export] public Color MinimapSelectedStructureColor = new Color(1, 1, 0, 1);
 	[Export] public Color MinimapLineColor = new Color(0, 0, 0, 0.7f);
 	// Chain cables on the minimap, in minimap pixels. Matched to the dots: a
 	// thinner line between 6-pixel markers reads as a gap rather than as a chain.
@@ -117,7 +117,7 @@ public partial class GameManager : Node
 	[Export] public bool SpawnPools = true;
 	/// <summary>
 	/// Side of one pool, in world units: three node diameters. A node's radius is
-	/// 1.0 (see Scenes/base_node.tscn), so a diameter is 2.0 and a side is 6.0.
+	/// 1.0 (see Scenes/structure.tscn), so a diameter is 2.0 and a side is 6.0.
 	/// </summary>
 	[Export] public float PoolSide = 6.0f;
 	/// <summary>
@@ -127,7 +127,7 @@ public partial class GameManager : Node
 	/// </summary>
 	[Export(PropertyHint.Range, "0,0.5")] public float PoolCoverageFraction = 0.01f;
 
-	public BaseNode SelectedNode;
+	public Structure SelectedStructure;
 
 	/// <summary>
 	/// The map's purple pools, or null when <see cref="SpawnPools"/> is off.
@@ -161,24 +161,24 @@ public partial class GameManager : Node
 	public bool IsGameOver { get; private set; } = false;
 
 	/// <summary>
-	/// Container that spawned chain nodes are parented under. A combatant may
+	/// Container that spawned chain roots are parented under. A combatant may
 	/// spawn its root while the GameManager is still being readied, and neither
 	/// the tree root nor the scene root accepts children at that point ("parent
 	/// node is busy setting up children"); a node's own children never are.
 	/// </summary>
-	public Node3D NodeContainer { get; private set; }
+	public Node3D StructureContainer { get; private set; }
 
 	/// <summary>
 	/// Where everything spawned during a match is parented: ammo in flight,
-	/// explosions, and the chain nodes ammo deploys (a combatant's own root is
-	/// parented under <see cref="NodeContainer"/> directly).
+	/// explosions, and the structures ammo deploys (a combatant's own root is
+	/// parented under <see cref="StructureContainer"/> directly).
 	///
 	/// Always a node *inside the scene*, never the tree root: restarting a
 	/// finished match reloads the scene, and a reload frees the scene alone. A
 	/// node parented to the tree root outlives the match and leaks into the next
 	/// one — visible, unselectable, owned by a chain that no longer exists, and
-	/// the first "BaseNode" in the tree, so the new match would adopt it as the
-	/// player's starting node (see <see cref="SceneRoot"/>).
+	/// the first "Structure" in the tree, so the new match would adopt it as the
+	/// player's starting structure (see <see cref="SceneRoot"/>).
 	///
 	/// Falls back to the tree root only before the match has been set up.
 	/// </summary>
@@ -186,16 +186,16 @@ public partial class GameManager : Node
 	{
 		get
 		{
-			if (IsInstanceValid(NodeContainer)) return NodeContainer;
+			if (IsInstanceValid(StructureContainer)) return StructureContainer;
 			return GetTree()?.Root;
 		}
 	}
 
 	/// <summary>
 	/// The subtree this match lives in — the scene root a restart replaces
-	/// (GameManager is a direct child of it). The player's starting node is
-	/// looked up from here rather than from the tree root, so a node that lives
-	/// outside the scene can never be mistaken for part of the match.
+	/// (GameManager is a direct child of it). The player's starting structure is
+	/// looked up from here rather than from the tree root, so a structure that
+	/// lives outside the scene can never be mistaken for part of the match.
 	/// </summary>
 	private Node SceneRoot => GetParent() ?? GetTree().Root;
 
@@ -234,8 +234,8 @@ public partial class GameManager : Node
 	private ColorRect _minimapViewIndicator;
 	private Vector2I _lastMinimapPixelSize = Vector2I.Zero;
 
-	// Node markers on the minimap (BaseNode -> dot), reconciled every frame.
-	private readonly Dictionary<BaseNode, ColorRect> _minimapMarkers = new Dictionary<BaseNode, ColorRect>();
+	// Structure markers on the minimap (Structure -> dot), reconciled every frame.
+	private readonly Dictionary<Structure, ColorRect> _minimapMarkers = new Dictionary<Structure, ColorRect>();
 
 	// Pool markers on the minimap, one per pool in field order. Flat squares in
 	// MinimapPoolColor: the pools' own 3D geometry is on PurplePool.WorldRenderLayer
@@ -243,17 +243,17 @@ public partial class GameManager : Node
 	private readonly List<ColorRect> _minimapPoolMarkers = new List<ColorRect>();
 	private Node2D _minimapPoolLayer;
 
-	// Connection lines on the minimap (child node -> line to its parent),
+	// Connection lines on the minimap (child structure -> line to its parent),
 	// reconciled every frame. Drawn under the markers via a dedicated layer.
-	private readonly Dictionary<BaseNode, Line2D> _minimapLines = new Dictionary<BaseNode, Line2D>();
+	private readonly Dictionary<Structure, Line2D> _minimapLines = new Dictionary<Structure, Line2D>();
 	private Node2D _minimapLineLayer;
 
 	// True while the OS cursor is inside the game window. Edge panning is
 	// disabled otherwise so a stale edge position never keeps panning.
 	private bool _mouseInsideWindow = true;
 
-	// Every BaseNode currently in the game, for locating surviving chain roots.
-	private readonly List<BaseNode> _allNodes = new List<BaseNode>();
+	// Every Structure currently in the game, for locating surviving chain roots.
+	private readonly List<Structure> _structures = new List<Structure>();
 
 	// TurnEvents that must finish before the current turn's resolution completes.
 	private readonly List<TurnEvent> _pendingTurnEvents = new List<TurnEvent>();
@@ -274,7 +274,7 @@ public partial class GameManager : Node
 		// 1. Setup Camera Offset
 		if (MainCamera != null)
 		{
-			var startBase = SceneRoot.FindChild("BaseNode", true, false) as Node3D;
+			var startBase = SceneRoot.FindChild("Structure", true, false) as Node3D;
 			if (startBase != null)
 				_cameraOffset = MainCamera.GlobalPosition - startBase.GlobalPosition;
 			else
@@ -302,11 +302,11 @@ public partial class GameManager : Node
 		window.SizeChanged += UpdateMinimapLayout; // Keep the minimap sized to the window.
 
 		// Build the match and hand the first turn to the first combatant.
-		NodeContainer = new Node3D { Name = "Nodes" };
-		AddChild(NodeContainer);
+		StructureContainer = new Node3D { Name = "Structures" };
+		AddChild(StructureContainer);
 		CreateCombatants();
 
-		// After NodeContainer: the pool field parents itself under the spawn
+		// After StructureContainer: the pool field parents itself under the spawn
 		// container, like everything else a match spawns.
 		CreatePools();
 
@@ -321,7 +321,7 @@ public partial class GameManager : Node
 	// ------------------------------------------------------------------
 
 	/// <summary>
-	/// Builds the match: the player's chain (the BaseNode already placed in the
+	/// Builds the match: the player's chain (the Structure already placed in the
 	/// scene) plus one enemy chain spawned <see cref="EnemyStartScreensRight"/>
 	/// screens to the right of it.
 	///
@@ -348,7 +348,7 @@ public partial class GameManager : Node
 			Name = "PlayerCombatant",
 			DisplayName = "You",
 			Team = 0,
-			MinimapColor = MinimapNodeColor,
+			MinimapColor = MinimapStructureColor,
 			RootUnit = startingUnit,
 		};
 		AddChild(_playerCombatant);
@@ -357,7 +357,7 @@ public partial class GameManager : Node
 		// Looked up inside this scene (never the tree root) so a node left
 		// outside it — anything that outlived an earlier match — cannot be
 		// adopted as the player's root.
-		var startBase = SceneRoot.FindChild("BaseNode", true, false) as BaseNode;
+		var startBase = SceneRoot.FindChild("Structure", true, false) as Structure;
 		if (startBase != null)
 		{
 			// Adopted before the node's _Ready runs (GameManager is ready first, so
@@ -366,7 +366,7 @@ public partial class GameManager : Node
 		}
 		else
 		{
-			GD.PushWarning("No starting BaseNode found in the scene — spawning the player's root at the origin.");
+			GD.PushWarning("No starting Structure found in the scene — spawning the player's root at the origin.");
 			_playerCombatant.SpawnRoot(Vector3.Zero);
 		}
 
@@ -376,7 +376,7 @@ public partial class GameManager : Node
 			Name = "EnemyCombatant",
 			DisplayName = "Enemy",
 			Team = 1,
-			MinimapColor = MinimapEnemyNodeColor,
+			MinimapColor = MinimapEnemyStructureColor,
 			RootUnit = startingUnit,
 			ThinkTime = EnemyThinkTime,
 			AimSpreadDegrees = EnemyAimSpreadDegrees,
@@ -385,7 +385,7 @@ public partial class GameManager : Node
 		};
 		AddChild(_enemyCombatant);
 		_combatants.Add(_enemyCombatant);
-		BaseNode enemyRoot = _enemyCombatant.SpawnRoot(GetEnemyStartPosition());
+		Structure enemyRoot = _enemyCombatant.SpawnRoot(GetEnemyStartPosition());
 
 		GD.Print($"[Match] {_combatants.Count} combatants ready. Enemy root at {enemyRoot?.GlobalPosition} "
 			+ $"({EnemyStartScreensRight} screens right of the player's root).");
@@ -398,9 +398,9 @@ public partial class GameManager : Node
 	private Vector3 GetEnemyStartPosition()
 	{
 		Vector3 origin = Vector3.Zero;
-		if (_playerCombatant?.RootNode != null && IsInstanceValid(_playerCombatant.RootNode))
+		if (_playerCombatant?.RootStructure != null && IsInstanceValid(_playerCombatant.RootStructure))
 		{
-			origin = _playerCombatant.RootNode.GlobalPosition;
+			origin = _playerCombatant.RootStructure.GlobalPosition;
 		}
 
 		float screenWidth = (MainCamera != null ? MainCamera.Size : 30f) * GetViewportAspect();
@@ -570,27 +570,27 @@ public partial class GameManager : Node
 		AddChild(_aimIndicator);
 	}
 
-	public void SelectNode(BaseNode node)
+	public void SelectStructure(Structure structure)
 	{
 		// No selecting while the turn's events are still resolving.
 		if (!IsPlayerTurn) return;
-		if (node == null || !IsInstanceValid(node) || node.IsDestroyed) return;
-		// Only the player's own chain is controllable — enemy nodes are never
-		// selectable, so a click can't hijack the opponent's chain.
-		if (node.OwnerChain != _playerCombatant) return;
+		if (structure == null || !IsInstanceValid(structure) || structure.IsDestroyed) return;
+		// Only the player's own chain is controllable — enemy structures are
+		// never selectable, so a click can't hijack the opponent's chain.
+		if (structure.OwnerChain != _playerCombatant) return;
 
 		// The previous selection may have been destroyed; only touch it
 		// while it is still a valid instance.
-		if (SelectedNode != null && IsInstanceValid(SelectedNode))
+		if (SelectedStructure != null && IsInstanceValid(SelectedStructure))
 		{
-			SelectedNode.SetHighlight(false);
+			SelectedStructure.SetHighlight(false);
 		}
-		SelectedNode = node;
-		SelectedNode.SetHighlight(true);
-		
+		SelectedStructure = structure;
+		SelectedStructure.SetHighlight(true);
+
 		// Show indicator and move camera
 		_aimIndicator.Visible = true;
-		CenterCameraOn(node.GlobalPosition);
+		CenterCameraOn(structure.GlobalPosition);
 
 		// Cancel charging if we switch nodes
 		_isCharging = false;
@@ -610,7 +610,7 @@ public partial class GameManager : Node
 		// If the selected node dies, control reverts to the highest
 		// remaining node in the chain (or ends the game in defeat if none
 		// remain).
-		if (SelectedNode != null && (!IsInstanceValid(SelectedNode) || SelectedNode.IsDestroyed))
+		if (SelectedStructure != null && (!IsInstanceValid(SelectedStructure) || SelectedStructure.IsDestroyed))
 		{
 			if (!IsResolvingTurn)
 			{
@@ -620,7 +620,7 @@ public partial class GameManager : Node
 			return;
 		}
 
-		if (!IsPlayerTurn || SelectedNode == null) return;
+		if (!IsPlayerTurn || SelectedStructure == null) return;
 
 		HandleAiming((float)delta);
 		HandleFiringLogic((float)delta);
@@ -635,7 +635,7 @@ public partial class GameManager : Node
 		if (Input.IsActionJustPressed("switch_ammo_next")) CycleUnit(1);
 		if (Input.IsActionJustPressed("switch_ammo_previous")) CycleUnit(-1);
 
-		ShowAimPreview(SelectedNode, _currentAimAngle, _currentPowerPercent);
+		ShowAimPreview(SelectedStructure, _currentAimAngle, _currentPowerPercent);
 	}
 
 	/// <summary>
@@ -647,7 +647,7 @@ public partial class GameManager : Node
 	/// <param name="aimAngleRadians">Aim angle, in the aim-indicator convention.</param>
 	/// <param name="powerPercent">Charge level, 0..1.</param>
 	/// <param name="showPowerMeter">Also drive the shared power bar (used during an AI turn).</param>
-	public void ShowAimPreview(BaseNode origin, float aimAngleRadians, float powerPercent, bool showPowerMeter = false)
+	public void ShowAimPreview(Structure origin, float aimAngleRadians, float powerPercent, bool showPowerMeter = false)
 	{
 		if (_aimIndicator == null) return;
 		if (origin == null || !IsInstanceValid(origin) || origin.IsDestroyed) return;
@@ -724,7 +724,7 @@ public partial class GameManager : Node
 	/// <param name="powerPercent">Charge level, 0..1, mapped onto the launch force range.</param>
 	private void Fire(float powerPercent)
 	{
-		AmmoLauncher.Launch(CurrentUnit, SelectedNode, _currentAimAngle, powerPercent, null);
+		AmmoLauncher.Launch(CurrentUnit, SelectedStructure, _currentAimAngle, powerPercent, null);
 	}
 
 	// ------------------------------------------------------------------
@@ -831,13 +831,13 @@ public partial class GameManager : Node
 			// Note: a destroyed node may still be a "valid" instance at this
 			// point (QueueFree removes it at the end of the frame), so check
 			// the IsDestroyed flag rather than IsInstanceValid alone.
-			bool selectionSurvived = SelectedNode != null
-				&& IsInstanceValid(SelectedNode)
-				&& !SelectedNode.IsDestroyed
-				&& SelectedNode.OwnerChain == combatant;
+			bool selectionSurvived = SelectedStructure != null
+				&& IsInstanceValid(SelectedStructure)
+				&& !SelectedStructure.IsDestroyed
+				&& SelectedStructure.OwnerChain == combatant;
 
-			BaseNode target = selectionSurvived ? SelectedNode : _playerCombatant.FindHighestRemainingNode();
-			SelectNode(target);
+			Structure target = selectionSurvived ? SelectedStructure : _playerCombatant.FindRootStructure();
+			SelectStructure(target);
 			GD.Print($"[Turn {CurrentTurn}] {combatant.DisplayName}: move.");
 		}
 		else
@@ -848,12 +848,12 @@ public partial class GameManager : Node
 
 			// An enemy may be well off-screen (it starts two screens away), so
 			// follow whoever is acting; the player's own turn centers the camera
-			// back on their selection through SelectNode().
+			// back on their selection through SelectStructure().
 			if (CenterCameraOnActingCombatant
 				&& combatant is NodeChainCombatant chain
-				&& chain.ActionNode != null)
+				&& chain.ActionStructure != null)
 			{
-				CenterCameraOn(chain.ActionNode.GlobalPosition);
+				CenterCameraOn(chain.ActionStructure.GlobalPosition);
 			}
 
 			GD.Print($"[Turn {CurrentTurn}] {combatant.DisplayName}: move.");
@@ -932,7 +932,7 @@ public partial class GameManager : Node
 		IsGameOver = true;
 		IsPlayerTurn = false;
 		IsResolvingTurn = false;
-		SelectedNode = null;
+		SelectedStructure = null;
 		HideAimIndicator();
 		if (PowerBar != null) PowerBar.Visible = false;
 		if (RestartLabel != null) RestartLabel.Visible = true;
@@ -975,38 +975,38 @@ public partial class GameManager : Node
 	/// </summary>
 	private void RevertControlToHighestNode()
 	{
-		BaseNode highest = _playerCombatant?.FindHighestRemainingNode();
+		Structure highest = _playerCombatant?.FindRootStructure();
 		if (highest == null)
 		{
 			EndGame(false);
 			return;
 		}
-		SelectNode(highest);
+		SelectStructure(highest);
 	}
 
 	// ------------------------------------------------------------------
 	// Node registry
 	// ------------------------------------------------------------------
 
-	public void RegisterNode(BaseNode node)
+	public void RegisterStructure(Structure structure)
 	{
-		if (node != null && !_allNodes.Contains(node))
+		if (structure != null && !_structures.Contains(structure))
 		{
-			_allNodes.Add(node);
+			_structures.Add(structure);
 		}
 	}
 
-	public void UnregisterNode(BaseNode node)
+	public void UnregisterStructure(Structure structure)
 	{
-		_allNodes.Remove(node);
+		_structures.Remove(structure);
 	}
 
 	/// <summary>Minimap color for a node: the selection stands out, otherwise nodes use their owner's color.</summary>
-	private Color GetNodeMinimapColor(BaseNode node)
+	private Color GetNodeMinimapColor(Structure node)
 	{
-		if (node == SelectedNode) return MinimapSelectedNodeColor;
+		if (node == SelectedStructure) return MinimapSelectedStructureColor;
 		if (node.OwnerChain != null && IsInstanceValid(node.OwnerChain)) return node.OwnerChain.MinimapColor;
-		return MinimapNodeColor;
+		return MinimapStructureColor;
 	}
 
 	/// <summary>Shows the round number and whose move it is.</summary>
@@ -1279,16 +1279,16 @@ public partial class GameManager : Node
 	}
 
 	/// <summary>
-	/// Reconciles the minimap's node markers: creates a dot for every live
-	/// node (black) and highlights the selected node (yellow), and removes
-	/// markers for nodes that have been destroyed. Dots are plain ColorRects
+	/// Reconciles the minimap's structure markers: creates a dot for every live
+	/// structure (black) and highlights the selected one (yellow), and removes
+	/// markers for structures that have been destroyed. Dots are plain ColorRects
 	/// clipped to the minimap, so anything outside the shown region vanishes.
 	/// </summary>
 	private void UpdateMinimapMarkers()
 	{
 		if (_minimapRect == null) return;
 
-		foreach (BaseNode node in _allNodes)
+		foreach (Structure node in _structures)
 		{
 			if (node == null || !IsInstanceValid(node) || node.IsDestroyed) continue;
 
@@ -1297,7 +1297,7 @@ public partial class GameManager : Node
 				marker = new ColorRect
 				{
 					Size = MinimapMarkerSize,
-					Color = MinimapNodeColor,
+					Color = MinimapStructureColor,
 					MouseFilter = Control.MouseFilterEnum.Ignore,
 				};
 				_minimapRect.AddChild(marker);
@@ -1311,19 +1311,19 @@ public partial class GameManager : Node
 
 		// Drop markers whose node has been destroyed, freed, or left the
 		// registry since last frame.
-		List<BaseNode> dead = null;
-		foreach (KeyValuePair<BaseNode, ColorRect> pair in _minimapMarkers)
+		List<Structure> dead = null;
+		foreach (KeyValuePair<Structure, ColorRect> pair in _minimapMarkers)
 		{
-			if (!IsInstanceValid(pair.Key) || pair.Key.IsDestroyed || !_allNodes.Contains(pair.Key))
+			if (!IsInstanceValid(pair.Key) || pair.Key.IsDestroyed || !_structures.Contains(pair.Key))
 			{
 				pair.Value.QueueFree();
-				if (dead == null) dead = new List<BaseNode>();
+				if (dead == null) dead = new List<Structure>();
 				dead.Add(pair.Key);
 			}
 		}
 		if (dead != null)
 		{
-			foreach (BaseNode key in dead)
+			foreach (Structure key in dead)
 			{
 				_minimapMarkers.Remove(key);
 			}
@@ -1375,7 +1375,7 @@ public partial class GameManager : Node
 
 	/// <summary>
 	/// Reconciles the minimap's connection lines: a plain line for every
-	/// child node with a live parent, drawn between the two dots (no
+	/// structure with a live parent, drawn between the two dots (no
 	/// directionality). Lines live in their own layer under the markers and
 	/// are clipped to the minimap like everything else.
 	/// </summary>
@@ -1383,10 +1383,10 @@ public partial class GameManager : Node
 	{
 		if (_minimapLineLayer == null) return;
 
-		foreach (BaseNode node in _allNodes)
+		foreach (Structure node in _structures)
 		{
 			if (node == null || !IsInstanceValid(node) || node.IsDestroyed) continue;
-			BaseNode parent = node.ParentBase;
+			Structure parent = node.ParentStructure;
 			if (parent == null || !IsInstanceValid(parent) || parent.IsDestroyed) continue;
 
 			if (!_minimapLines.TryGetValue(node, out Line2D line) || !IsInstanceValid(line))
@@ -1407,23 +1407,23 @@ public partial class GameManager : Node
 			};
 		}
 
-		// Drop lines whose node (or its parent) has died or left the chain.
-		List<BaseNode> dead = null;
-		foreach (KeyValuePair<BaseNode, Line2D> pair in _minimapLines)
+		// Drop lines whose structure (or its parent) has died or left the chain.
+		List<Structure> dead = null;
+		foreach (KeyValuePair<Structure, Line2D> pair in _minimapLines)
 		{
-			BaseNode node = pair.Key;
-			BaseNode parent = node?.ParentBase;
-			if (!IsInstanceValid(node) || node.IsDestroyed || !_allNodes.Contains(node)
+			Structure node = pair.Key;
+			Structure parent = node?.ParentStructure;
+			if (!IsInstanceValid(node) || node.IsDestroyed || !_structures.Contains(node)
 				|| parent == null || !IsInstanceValid(parent) || parent.IsDestroyed)
 			{
 				pair.Value.QueueFree();
-				if (dead == null) dead = new List<BaseNode>();
+				if (dead == null) dead = new List<Structure>();
 				dead.Add(node);
 			}
 		}
 		if (dead != null)
 		{
-			foreach (BaseNode key in dead)
+			foreach (Structure key in dead)
 			{
 				_minimapLines.Remove(key);
 			}
