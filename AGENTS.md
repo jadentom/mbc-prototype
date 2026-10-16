@@ -114,6 +114,9 @@ not stored in the scene. See [docs/camera](docs/camera/README.md).
 | `Scripts/TurnSystem/TurnEvent.cs` | One unit of turn resolution; the turn ends when all pending events resolve. |
 | `Scripts/World/PoolField.cs` | The map's purple pools: a fixed, grid-free scatter over the ground, one per-frame loop that pulses them all, and the pool queries future collision checks will use. |
 | `Scripts/World/PurplePool.cs` | One purple pool: a solid rounded square of energy with a rim of dead grass around it, pulsing between a resting violet and a bright glow. Knows its own footprint (`ContainsXZ`/`OverlapsXZ`). |
+| `Scripts/Simulation/MatchCommand.cs` | **One action, as data**: the seat, the unit id, the origin structure id, aim and power. Serializes to a dictionary; names things by id, never by reference. |
+| `Scripts/Simulation/CommandLog.cs` | **The match's input**: every action in the order it was applied, with the seed and map, written and read as JSON. Applying is GameManager's job, not the log's. |
+| `Scripts/Testing/MatchHarness.cs` | The headless regression harness (`Scenes/harness.tscn`): plays a match with nobody at the keyboard, records its log, prints a state hash, and can replay a log and assert the hash. |
 | `Shaders/CableShader.gdshader` | Visual cable between chained nodes. |
 
 ## Unit data (`Resources/`)
@@ -198,7 +201,9 @@ Authoritative flow, all in `GameManager`:
   `IsPlayerTurn = false`, the camera centered on its action structure, and
   `BeginTurn()`.
 - `CompleteTurn()` runs when the pending-event list drains: it ends the acting
-  combatant's turn, evaluates the match, and otherwise `AdvanceTurn()`s.
+  combatant's turn, evaluates the match, and otherwise queues the advance —
+  `QueueTurnAdvance()` defers `AdvanceTurn()` to idle time, because a turn can end
+  from inside `_ExitTree` where the tree is locked (see *Determinism*).
 - An AI combatant **must** either register a `TurnEvent` during its turn or
   call `GameManager.EndIdleTurn()`, otherwise the rotation would wait forever.
 - Win/lose: `EvaluateGameOver()` ends the match when a whole `Team` has no
@@ -277,6 +282,68 @@ Team/targeting details:
   Restarting a finished match reloads the scene, and a reload frees the scene
   alone: a structure left under the tree root outlives the match and comes back
   as a stale one nobody can select (its chain is gone), standing on the map.
+
+## Determinism & the command log
+
+A match is a function of **(map, seed, command log)** (docs/parity M0.5). That is
+what makes replays, regression tests and "change a number, replay, compare"
+possible, and it only holds if everything obeys four rules.
+
+- **One way in.** `GameManager.SubmitCommand()` records the action and applies it;
+  `GameManager.ApplyCommand()` is the only thing that changes the world — no code
+  launches a unit, deploys a structure or spends energy around it. The player's
+  shots and the AI's both go through `SubmitCommand`, which is why a log is a
+  complete account of a match and replaying one *is* replaying the match.
+- **Ids, not references.** A command names its actor (`MatchCommand.Seat`, the combatant's
+  position in the rotation — not its team), its unit (`UnitDefinition.Id`) and its
+  origin (`Structure.Id`). `Structure.Id` is handed out by
+  `GameManager.RegisterStructure()` in the order the simulation creates things,
+  which is the same order on every run of the same log. Never put an object
+  reference in a command, and never renumber a structure.
+- **Randomness comes from the match.** `GameManager.Random` is seeded from
+  `GameManager.Seed`; simulation code must never call `GD.RandRange`/`GD.Randi`
+  (the global generator is shared with the engine and the editor). Add a random
+  choice by drawing from `GameManager.Instance.Random`.
+- **The simulation runs on physics steps.** Anything that moves — an ammo round,
+  a landing — is in `_PhysicsProcess` on the fixed step set in `project.godot`
+  (60/s), never in `_Process`, and `SimulationTicks` counts the steps.
+
+Two consequences worth knowing before changing the turn flow:
+
+- **The rotation advances at idle time** (`QueueTurnAdvance()`), never on the
+  spot. A turn can end from inside a node's `_ExitTree` — a destruction event
+  resolves there — and the tree is locked while nodes are removed, so anything
+  the next turn spawns fails with "parent node is busy setting up children" and
+  leaves a turn that can never resolve. If you add work to a turn, do not
+  un-defer that call.
+- **What is not deterministic yet**: the AI's `ThinkTime` and the cascade's 1.0 s
+  per generation are wall-clock timers. They pace the match rather than change
+  its outcome (the world is frozen while a turn resolves), but they are why the
+  harness is run with `--fixed-fps 60`, and the cascade's pacing is M2's to fix.
+  Float determinism holds for one build on one platform; a state hash compares
+  runs, not releases.
+
+`GameManager.StateHash()` fingerprints the live structures (id, unit, hit points,
+parent, position) in id order. Take it between turns, while nothing is resolving.
+
+## Tests
+
+`Scenes/harness.tscn` plays a real match headlessly: the harness is the player's
+brain, the AI plays itself, and both act through the command log.
+
+```sh
+# record a 10-round match, print its state hash, write the log
+godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --turns=10 --seed=7 --record=/tmp/m.json
+# replay it and assert it lands in the same state
+godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --replay=/tmp/m.json --expect=<hash>
+```
+
+`--fixed-fps 60` paces the run by frames rather than by the wall clock: it is much
+faster, and the think-timers stop depending on real time. The harness exits
+non-zero when an `--expect` hash does not match, and fails rather than hangs when
+a match stops making progress (it prints what was still in the world). Change a
+number in a `.tres`, replay a recorded log, and a different hash is the proof the
+change reached the simulation.
 
 ## Purple pools
 

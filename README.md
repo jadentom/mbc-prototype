@@ -69,6 +69,22 @@ Assets/          Textures
 docs/            Topic documentation (camera, parity plan, …)
 ```
 
+## Tests
+
+`Scenes/harness.tscn` plays a match with nobody at the keyboard — the harness
+takes the human's seat, the AI plays itself — and its state hash is how a change
+is checked:
+
+```sh
+dotnet build MbcPrototype.csproj
+godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --turns=10 --seed=7 --record=/tmp/m.json
+godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --replay=/tmp/m.json --expect=<hash>
+```
+
+The second command fails (non-zero exit) unless the replay lands in exactly the
+state the recording did. Change a number in a `.tres` resource, replay the same
+log, and a different hash is the proof the change reached the simulation.
+
 ## Documentation
 
 - `AGENTS.md` — agent guide for contributors (read before editing)

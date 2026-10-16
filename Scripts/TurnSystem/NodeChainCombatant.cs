@@ -1,7 +1,7 @@
 using Godot;
 using System.Collections.Generic;
-using MbcPrototype.Combat;
 using MbcPrototype.Core;
+using MbcPrototype.Simulation;
 using MbcPrototype.Units;
 
 namespace MbcPrototype.TurnSystem;
@@ -119,12 +119,17 @@ public abstract partial class NodeChainCombatant : Combatant
 	}
 
 	/// <summary>
-	/// Launches one unit from <paramref name="origin"/>. Goes through the exact
-	/// code path the player's shots use, and registers the TurnEvent that keeps
-	/// the turn open until the shot resolves.
+	/// Launches one unit from <paramref name="origin"/>, by way of the command log:
+	/// an AI's action is recorded exactly like the player's, so a match can be
+	/// replayed from the log alone (docs/parity M0.5). The command is applied
+	/// immediately, and registers the TurnEvent that keeps the turn open until the
+	/// shot resolves.
 	/// </summary>
 	protected void Launch(UnitDefinition unit, Structure origin, float aimAngleRadians, float powerPercent)
 	{
-		AmmoLauncher.Launch(unit, origin, aimAngleRadians, powerPercent, $"{DisplayName} {unit?.DisplayName ?? "?"}");
+		GameManager gm = GameManager.Instance;
+		if (gm == null || unit == null || origin == null) return;
+
+		gm.SubmitCommand(MatchCommand.Launch(Seat, unit.Id, origin.Id, aimAngleRadians, powerPercent));
 	}
 }

@@ -183,7 +183,7 @@ closes; the **size** column is a rough ordering device, not a promise.
 | **AI** | opponents that play differently | one `EnemyCombatant`: random aim in a 25° cone, random power, alternates node/bomb | **L** — one good planner, not ten |
 | **Modes** | skirmish setup | one hardcoded skirmish | **M** — a 1v1 setup screen |
 | **Map editor** | size, terrain, pools, starting positions, save/load/share | none | **L** — **last** (M9) |
-| **Replays / stats** | Replay Theatre + game summary | none; no serialization of game state at all | **L** |
+| **Replays / stats** | Replay Theatre + game summary | a command log recording every action from both seats, with the seed and map, written and read as JSON, plus a state hash to check a replay against (M0.5). No Replay Theatre, no save/load, no summary, no UI | **M** — M7 is the theatre and the summary |
 | **HUD / keys** | energy bar, build menu, HUD bar, D/R/C/N/P/L/A/Tab keys | power bar, two ammo icons, turn label, win/lose labels; `fire_shot`, `aim_left/right`, `switch_ammo_next/previous` | **M** |
 | **Audio** | music, voice, SFX and volume channels | nothing at all; the repo has no audio assets | **S** — placeholder SFX only |
 
@@ -225,9 +225,14 @@ retrofitting any of them after the content exists costs several times more.
    resource, with one development map shipped. The plane is still what the
    ground *is* (M3's wrapping world is what gives the bounds teeth), and the
    height field is painted but flat.
-6. **No determinism, no serialization.** Replays, save/load, regression testing
-   and painless balance iteration all need the same missing thing: a game state
-   that is a function of a seed plus an ordered command list.
+6. ~~**No determinism, no serialization.**~~ **Landed in M0.5.** A match is now a
+   function of (map, seed, command log): every action from either seat goes
+   through one entry point that records it and applies it, structures carry stable
+   ids, the simulation's randomness comes from a seeded generator, physics runs on
+   a fixed step, and `Scenes/harness.tscn` replays a log and asserts the state
+   hash it lands in. What is still wall-clock-paced — the AI's think time and the
+   cascade's one second per generation — is called out in `AGENTS.md`; the cascade
+   belongs to M2.
 7. **`GameManager.cs` is a 1355-line god object** owning turn flow, aiming,
    combatant creation, camera, minimap, pools and input. It will not survive
    contact with twelve units.
@@ -301,11 +306,17 @@ is cheap because of it.
   heights (ground 0, plateau 2, mountain 4 — our first guess) are read by nothing
   until M3 turns them into terrain, the height→range curve and the flat-ground
   landing rule. Water is not a state at all (§1).
-- **M0.5 — Command log & determinism.** Every player and AI action becomes a
-  serializable command appended to an ordered log; simulation advances only by
-  applying commands. Fixed timestep for physics-affecting steps. This is what
-  makes replays (M7), regression testing (§6) and iteration-on-a-replay (§2)
-  possible.
+- **M0.5 — Command log & determinism.** **Landed.** Every player and AI action is
+  a serializable `MatchCommand` appended to an ordered `CommandLog`, and the
+  simulation only ever advances by `GameManager.ApplyCommand` — the player's shots
+  and the AI's both go through `SubmitCommand`, which records and applies.
+  Commands name their seat, their unit and their origin structure by id, and
+  structures get those ids in creation order, so a log means the same thing on
+  every run. Randomness comes from the match's own generator seeded by
+  `MatchSeed`; physics-affecting steps run on the fixed 60/s step; and a state
+  hash makes a replay checkable. This is what makes replays (M7), regression
+  testing (§6) and iteration-on-a-replay (§2) possible — and the harness already
+  does all three.
 - **M0.6 — Split `GameManager`.** Turn flow, camera/minimap, map/world, and
   match setup become separate nodes, and the match stops knowing how many
   combatants there are. Keep `GameManager.Instance` during the transition so
@@ -607,9 +618,12 @@ re-release), so *feel* claims can be checked rather than argued — but the
 original is a reference, not an oracle. Use it to answer "does a Bomb's blast
 catch a neighbour?" and never to settle "should a Bomb do 3?":
 
-- a headless harness that loads a map + command log and asserts the resulting
-  state hash — the regression suite for every rule we implement, and the thing
-  that makes a tuning change safe;
+- ~~a headless harness that loads a map + command log and asserts the resulting
+  state hash~~ — **exists** (M0.5): `Scenes/harness.tscn` plays a match with
+  nobody at the keyboard, records its log and prints a state hash, and replays a
+  log with `--expect=<hash>`. It is the regression suite for every rule we
+  implement, and it is already how a tuning change is shown to have reached the
+  simulation. Run it with `--fixed-fps 60` (see `AGENTS.md`);
 - **golden replays** for the awkward rules (cascade, Power Spike taper, EMP
   disable, anti-air reload, Balloon death, Shield pass-through, wrap-around
   range);
@@ -713,7 +727,8 @@ stated exceptions
 - [ ] Every number in §7 lives in a resource, once
 - [ ] No gameplay literal left in a `.cs` file
 - [ ] A value can be changed live, in a running match, and written back
-- [ ] A balance change can be judged by replaying a recorded match
+- [x] A balance change can be judged by replaying a recorded match
+- [x] A match is reproducible from (map, seed, command log)
 
 **Options**
 - [ ] Clock (default 60 s)

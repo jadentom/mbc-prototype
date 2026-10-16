@@ -115,6 +115,22 @@ public partial class Structure : StaticBody3D
 	/// <summary>Current health. Starts at <see cref="MaxHealth"/> and bottoms out at zero.</summary>
 	public int Health { get; private set; }
 
+	/// <summary>
+	/// This structure's identity within its match, handed out when it registers:
+	/// the roots first, then the structures shots deploy, in the order they land.
+	///
+	/// Commands name structures by this id (docs/parity M0.5), so it has to be the
+	/// same number on every run of the same command log — which it is, because the
+	/// simulation creates things in the same order every time.
+	/// </summary>
+	public int Id { get; private set; }
+
+	/// <summary>Called by the match as this structure registers; an id is only ever assigned once.</summary>
+	public void AssignId(int id)
+	{
+		if (Id == 0) Id = id;
+	}
+
 	public override void _Ready()
 	{
 		if (Definition == null || Definition.HitPoints <= 0)

@@ -1,9 +1,12 @@
 using Godot;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
 using MbcPrototype.Combat;
 using MbcPrototype.Enemies;
 using MbcPrototype.Rules;
+using MbcPrototype.Simulation;
 using MbcPrototype.TurnSystem;
 using MbcPrototype.Units;
 using MbcPrototype.World;
@@ -91,6 +94,15 @@ public partial class GameManager : Node
 	[Export] public Label DefeatLabel;
 	[Export] public Label VictoryLabel;
 	[Export] public Label RestartLabel;
+
+	[ExportGroup("Match")]
+	/// <summary>
+	/// The seed this match runs on: every random choice the simulation makes comes
+	/// from it (docs/parity M0.5), so a match is reproducible from its seed and its
+	/// command log. Zero means "pick one at match start" — the chosen seed is
+	/// logged and written into the log, so a replay knows what to set.
+	/// </summary>
+	[Export] public int MatchSeed = 0;
 
 	[ExportGroup("Content")]
 	/// <summary>
@@ -191,6 +203,35 @@ public partial class GameManager : Node
 	/// </summary>
 	public bool IsResolvingTurn { get; private set; } = false;
 
+	/// <summary>
+	/// How many physics steps this match has taken — the simulation's own clock, as
+	/// opposed to frame time (docs/parity M0.5: a step that affects the simulation
+	/// runs on the fixed physics timestep).
+	///
+	/// Deliberately not part of <see cref="StateHash"/>: the same command log takes
+	/// the same steps to play out, but a run paced by wall-clock timers reaches a
+	/// different count at the same command, and a fingerprint has to be about the
+	/// state rather than about when it was taken.
+	/// </summary>
+	public int SimulationTicks { get; private set; }
+
+	/// <summary>The seed this match is running on (see <see cref="MatchSeed"/>).</summary>
+	public int Seed { get; private set; }
+
+	/// <summary>
+	/// The match's own random number generator, seeded from <see cref="Seed"/>.
+	/// Every random choice in the simulation must come from here rather than from
+	/// the global generator: the global one is shared with the engine and the
+	/// editor, so anything drawn from it depends on what else happened to run.
+	/// </summary>
+	public RandomNumberGenerator Random { get; private set; }
+
+	/// <summary>
+	/// The ordered log of everything this match has been told to do — the match's
+	/// input, and what a replay is made of (docs/parity M0.5).
+	/// </summary>
+	public CommandLog Commands { get; private set; }
+
 	/// <summary>The unit the player would fire right now (null when the roster is empty).</summary>
 	public UnitDefinition CurrentUnit => _currentUnitIndex >= 0 && _currentUnitIndex < _buildableUnits.Count
 		? _buildableUnits[_currentUnitIndex]
@@ -232,8 +273,20 @@ public partial class GameManager : Node
 	// disabled otherwise so a stale edge position never keeps panning.
 	private bool _mouseInsideWindow = true;
 
+	// Ids handed to structures as they register: the roots first, then whatever
+	// shots deploy, in the order the simulation creates them — which is what makes
+	// a command's structure id mean the same thing on a replay.
+	private int _nextStructureId = 1;
+
 	// Every Structure currently in the game, for locating surviving chain roots.
 	private readonly List<Structure> _structures = new List<Structure>();
+
+	// The recorded log a replay is playing, and how far through it we are.
+	private CommandLog _replay;
+	private int _replayIndex;
+
+	// A turn advance waiting for idle time (see QueueTurnAdvance).
+	private bool _advanceQueued;
 
 	// TurnEvents that must finish before the current turn's resolution completes.
 	private readonly List<TurnEvent> _pendingTurnEvents = new List<TurnEvent>();
@@ -267,6 +320,7 @@ public partial class GameManager : Node
 		// unit or a number off it: the HUD's unit strip, the starting structures
 		// and every launch all come from here.
 		ResolveContent();
+		ResolveRandomness();
 		if (PowerBar != null) PowerBar.Visible = false;
 		if (DefeatLabel != null) DefeatLabel.Visible = false;
 		if (VictoryLabel != null) VictoryLabel.Visible = false;
@@ -326,6 +380,7 @@ public partial class GameManager : Node
 		{
 			Name = "PlayerCombatant",
 			DisplayName = "You",
+			Seat = _combatants.Count,
 			Team = 0,
 			MinimapColor = MinimapStructureColor,
 			RootUnit = startingUnit,
@@ -345,6 +400,7 @@ public partial class GameManager : Node
 		{
 			Name = "EnemyCombatant",
 			DisplayName = "Enemy",
+			Seat = _combatants.Count,
 			Team = 1,
 			MinimapColor = MinimapEnemyStructureColor,
 			RootUnit = startingUnit,
@@ -449,6 +505,28 @@ public partial class GameManager : Node
 		BuildUnitIcons();
 		_currentUnitIndex = 0;
 		UpdateUnitSelector();
+	}
+
+	/// <summary>
+	/// Settles the seed the match runs on and builds the two things that depend on
+	/// it: the match's own random generator, and the command log (which records the
+	/// seed so a replay knows what to set). A seed of zero means "pick one", and the
+	/// pick is printed — a match nobody can reproduce is a match nobody can test.
+	/// </summary>
+	private void ResolveRandomness()
+	{
+		Seed = MatchSeed != 0 ? MatchSeed : (int)(GD.Randi() & 0x7fffffff);
+		if (Seed == 0) Seed = 1;
+
+		Random = new RandomNumberGenerator { Seed = (ulong)Seed };
+
+		Commands = new CommandLog
+		{
+			Seed = Seed,
+			MapId = Map?.Id ?? "",
+		};
+
+		GD.Print($"[Match] Seed {Seed} on map '{Commands.MapId}'{(MatchSeed != 0 ? "" : " (chosen)")}.");
 	}
 
 	/// <summary>
@@ -573,6 +651,16 @@ public partial class GameManager : Node
 		_isCharging = false;
 		_currentPowerPercent = 0f;
 		if (PowerBar != null) PowerBar.Visible = false;
+	}
+
+	/// <summary>
+	/// The match's fixed step: everything that moves under physics — an ammo
+	/// round's flight, a landing — advances here, never in _Process, so the same
+	/// command log plays out identically whatever the frame rate is doing.
+	/// </summary>
+	public override void _PhysicsProcess(double delta)
+	{
+		SimulationTicks++;
 	}
 
 	public override void _Process(double delta)
@@ -701,7 +789,11 @@ public partial class GameManager : Node
 	/// <param name="powerPercent">Charge level, 0..1, mapped onto the launch force range.</param>
 	private void Fire(float powerPercent)
 	{
-		AmmoLauncher.Launch(CurrentUnit, SelectedStructure, _currentAimAngle, powerPercent, null);
+		UnitDefinition unit = CurrentUnit;
+		if (ActiveCombatant == null || SelectedStructure == null || unit == null) return;
+
+		SubmitCommand(MatchCommand.Launch(
+			ActiveCombatant.Seat, unit.Id, SelectedStructure.Id, _currentAimAngle, powerPercent));
 	}
 
 	// ------------------------------------------------------------------
@@ -764,6 +856,32 @@ public partial class GameManager : Node
 		// combatant with no root left loses the match for its team.
 		if (EvaluateGameOver()) return;
 
+		QueueTurnAdvance();
+	}
+
+	/// <summary>
+	/// Advances the rotation at idle time rather than on the spot.
+	///
+	/// A turn can end from inside a node's <c>_ExitTree</c>: a structure's
+	/// destruction event resolves there, and it is often the last event of the turn.
+	/// The scene tree is locked while nodes are being removed, so anything the next
+	/// turn spawns — an AI's shot, a replayed command, anything that adds a child —
+	/// fails with "parent node is busy setting up children", leaving a turn whose
+	/// event can never resolve. Deferring costs one frame and makes the rotation safe
+	/// from wherever it was triggered.
+	/// </summary>
+	private void QueueTurnAdvance()
+	{
+		if (_advanceQueued) return;
+
+		_advanceQueued = true;
+		Callable.From(AdvanceTurnDeferred).CallDeferred();
+	}
+
+	private void AdvanceTurnDeferred()
+	{
+		_advanceQueued = false;
+		if (IsGameOver) return;
 		AdvanceTurn();
 	}
 
@@ -801,6 +919,18 @@ public partial class GameManager : Node
 		ActiveCombatant = combatant;
 		if (combatant == null) return;
 
+		if (IsReplaying)
+		{
+			// Neither input nor the AI: the log acts for every seat in turn
+			// (docs/parity M0.5).
+			IsPlayerTurn = false;
+			HideAimIndicator();
+			FollowActingCombatant(combatant);
+			PlayNextReplayCommand(combatant);
+			UpdateTurnLabel();
+			return;
+		}
+
 		if (combatant.IsPlayerControlled)
 		{
 			IsPlayerTurn = true;
@@ -822,22 +952,27 @@ public partial class GameManager : Node
 			// No input for this combatant — it acts on its own from here.
 			IsPlayerTurn = false;
 			HideAimIndicator();
-
-			// An enemy may be well off-screen (it starts two screens away), so
-			// follow whoever is acting; the player's own turn centers the camera
-			// back on their selection through SelectStructure().
-			if (CenterCameraOnActingCombatant
-				&& combatant is NodeChainCombatant chain
-				&& chain.ActionStructure != null)
-			{
-				CenterCameraOn(chain.ActionStructure.GlobalPosition);
-			}
+			FollowActingCombatant(combatant);
 
 			GD.Print($"[Turn {CurrentTurn}] {combatant.DisplayName}: move.");
 			combatant.BeginTurn();
 		}
 
 		UpdateTurnLabel();
+	}
+
+	/// <summary>
+	/// Points the camera at whoever is acting, when that is wanted. An AI (or a
+	/// replayed) combatant can be anywhere on the map; the player's own turn
+	/// centers the camera back on their selection through SelectStructure().
+	/// </summary>
+	private void FollowActingCombatant(Combatant combatant)
+	{
+		if (!CenterCameraOnActingCombatant) return;
+		if (combatant is not NodeChainCombatant chain) return;
+		if (chain.ActionStructure == null) return;
+
+		CenterCameraOn(chain.ActionStructure.GlobalPosition);
 	}
 
 	/// <summary>
@@ -962,15 +1097,225 @@ public partial class GameManager : Node
 	}
 
 	// ------------------------------------------------------------------
+	// Commands: the match's input, and the only way it changes
+	// ------------------------------------------------------------------
+
+	/// <summary>
+	/// The one way anything in a match changes: record the action, then apply it
+	/// (docs/parity M0.5). Live play goes through here — the player's shots and the
+	/// AI's alike — so the log is a complete account of the match, and applying the
+	/// log is replaying it.
+	/// </summary>
+	public void SubmitCommand(MatchCommand command)
+	{
+		Commands?.Record(command);
+		ApplyCommand(command);
+	}
+
+	/// <summary>
+	/// Applies a command to the world. Nothing else may launch a unit, deploy a
+	/// structure or spend energy: a replay <em>is</em> this method being called with
+	/// a recorded log, and anything that changed the simulation outside it would
+	/// make the log a lie.
+	///
+	/// A command that cannot be applied — a structure that is no longer there, a
+	/// unit the roster does not have — is reported and dropped, leaving the turn
+	/// to end normally rather than hanging the rotation.
+	/// </summary>
+	public void ApplyCommand(MatchCommand command)
+	{
+		switch (command.Kind)
+		{
+			case CommandKind.Launch:
+			{
+				Structure origin = FindStructure(command.OriginStructureId);
+				if (origin == null)
+				{
+					GD.PushError($"GameManager: cannot apply {command.Describe()} — there is no live structure {command.OriginStructureId}.");
+					return;
+				}
+
+				UnitDefinition unit = Catalog?.Find(command.UnitId);
+				if (unit == null)
+				{
+					GD.PushError($"GameManager: cannot apply {command.Describe()} — the roster has no '{command.UnitId}'.");
+					return;
+				}
+
+				AmmoLauncher.Launch(unit, origin, command.AimAngleRadians, command.PowerPercent,
+					$"seat {command.Seat} {unit.DisplayName}");
+				return;
+			}
+
+			default:
+				GD.PushError($"GameManager: cannot apply a {command.Kind} command.");
+				return;
+		}
+	}
+
+	/// <summary>
+	/// How many live structures are standing. A cheap progress signal for tests and
+	/// diagnostics: it changes when the match does, and not when the engine ticks.
+	/// </summary>
+	public int LiveStructureCount
+	{
+		get
+		{
+			int count = 0;
+			foreach (Structure structure in _structures)
+			{
+				if (structure != null && IsInstanceValid(structure) && !structure.IsDestroyed) count++;
+			}
+			return count;
+		}
+	}
+
+	/// <summary>The live structure with the given id, or null when it is gone.</summary>
+	public Structure FindStructure(int id)
+	{
+		foreach (Structure structure in _structures)
+		{
+			if (structure != null && IsInstanceValid(structure) && !structure.IsDestroyed && structure.Id == id)
+			{
+				return structure;
+			}
+		}
+		return null;
+	}
+
+	/// <summary>True while a recorded log is acting for every seat instead of input and the AI.</summary>
+	public bool IsReplaying => _replay != null;
+
+	/// <summary>
+	/// Hands the match a recorded log to play instead of taking input or letting
+	/// the AI decide (docs/parity M0.5). Each seat's turn takes the next logged
+	/// command for that seat, in order.
+	///
+	/// A log that does not fit the match — a command for a seat that is not acting,
+	/// a structure that is not there — ends the replay and says so, because a
+	/// replay that quietly diverges from the match it recorded is worse than one
+	/// that stops.
+	/// </summary>
+	public void StartReplay(CommandLog log)
+	{
+		if (log == null || log.Count == 0)
+		{
+			GD.PushError("GameManager: there is nothing to replay.");
+			return;
+		}
+
+		_replay = log;
+		_replayIndex = 0;
+		log.StopRecording();
+
+		GD.Print($"[Replay] {log.Describe()}.");
+	}
+
+	private void PlayNextReplayCommand(Combatant combatant)
+	{
+		if (combatant == null) return;
+
+		if (_replayIndex >= _replay.Count)
+		{
+			GD.Print("[Replay] the log is spent — the match carries on by itself from here.");
+			_replay = null;
+			StartTurn(combatant);
+			return;
+		}
+
+		MatchCommand command = _replay[_replayIndex];
+		if (command.Seat != combatant.Seat)
+		{
+			GD.PushError($"[Replay] the log has {command.Describe()} next, but seat {combatant.Seat} ('{combatant.DisplayName}') "
+				+ "is the one acting — the log does not fit this match. Stopping the replay.");
+			_replay = null;
+			EndIdleTurn();
+			return;
+		}
+
+		_replayIndex++;
+		GD.Print($"[Turn {CurrentTurn}] {combatant.DisplayName}: replaying {command.Describe()}.");
+		ApplyCommand(command);
+
+		// A command that could not be applied registers no TurnEvent, and the
+		// rotation would wait for one forever.
+		if (!IsResolvingTurn) EndIdleTurn();
+	}
+
+	/// <summary>
+	/// A fingerprint of the simulation: every live structure's id, unit, hit points,
+	/// parent and position (in id order), plus the round (docs/parity §6).
+	///
+	/// Two runs of the same match — from the same seed and the same command log —
+	/// must produce the same hash. That is what turns "a replay is faithful" from a
+	/// claim into a test. Positions are rounded before hashing so the fingerprint is
+	/// about the simulation and not about the last bit of a float.
+	///
+	/// Take it between turns, while nothing is resolving: a destruction cascade in
+	/// flight is a state no two observers would catch at the same moment.
+	/// </summary>
+	public string StateHash()
+	{
+		var structures = new List<Structure>();
+		foreach (Structure structure in _structures)
+		{
+			if (structure != null && IsInstanceValid(structure) && !structure.IsDestroyed) structures.Add(structure);
+		}
+		structures.Sort((a, b) => a.Id.CompareTo(b.Id));
+
+		var text = new StringBuilder();
+		text.Append("turn=").Append(CurrentTurn).Append(";seed=").Append(Seed);
+		foreach (Structure structure in structures)
+		{
+			Vector3 position = structure.GlobalPosition;
+			int parent = structure.ParentCord != null
+				&& IsInstanceValid(structure.ParentCord)
+				&& structure.ParentCord.ParentStructure != null
+					? structure.ParentCord.ParentStructure.Id
+					: 0;
+
+			text.Append('|').Append(structure.Id)
+				.Append(':').Append(structure.Definition?.Id ?? "?")
+				.Append(":hp").Append(structure.Health)
+				.Append(":from").Append(parent)
+				.Append(":at").Append(Round(position.X)).Append(',')
+				.Append(Round(position.Y)).Append(',')
+				.Append(Round(position.Z));
+		}
+
+		return Fnv1a64(text.ToString());
+	}
+
+	/// <summary>World coordinates are compared to a tenth of a millimetre, culture-invariantly.</summary>
+	private static string Round(float value)
+	{
+		return value.ToString("0.####", CultureInfo.InvariantCulture);
+	}
+
+	/// <summary>FNV-1a over the state text: small, stable, and not a security claim.</summary>
+	private static string Fnv1a64(string text)
+	{
+		ulong hash = 14695981039346656037UL;
+		foreach (char c in text)
+		{
+			hash ^= c;
+			hash *= 1099511628211UL;
+		}
+		return hash.ToString("x16");
+	}
+
+	// ------------------------------------------------------------------
 	// Node registry
 	// ------------------------------------------------------------------
 
 	public void RegisterStructure(Structure structure)
 	{
-		if (structure != null && !_structures.Contains(structure))
-		{
-			_structures.Add(structure);
-		}
+		if (structure == null || _structures.Contains(structure)) return;
+
+		// The id is the command log's handle on this structure, so it is assigned
+		// here — where the simulation learns the structure exists — and never moves.
+		structure.AssignId(_nextStructureId++);
+		_structures.Add(structure);
 	}
 
 	public void UnregisterStructure(Structure structure)

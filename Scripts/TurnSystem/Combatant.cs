@@ -18,6 +18,14 @@ public abstract partial class Combatant : Node
 	[Export] public string DisplayName = "Combatant";
 
 	/// <summary>
+	/// This combatant's seat in the rotation — its position, not its team: two
+	/// combatants on one team hold two seats. The command log names the seat that
+	/// acted, so a replay can tell whose turn a recorded action belonged to
+	/// (docs/parity M0.5).
+	/// </summary>
+	[Export] public int Seat = -1;
+
+	/// <summary>
 	/// Combatants on the same team never target each other and never fight:
 	/// the match ends as soon as one team has no combatant left that can act.
 	/// </summary>

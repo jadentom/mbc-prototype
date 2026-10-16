@@ -50,6 +50,14 @@ switch_ammo_previous={
 ]
 }
 
+[physics]
+
+; The simulation runs on a fixed step (docs/parity M0.5): the same command log
+; must take the same number of ticks to play out whatever the frame rate is
+; doing, because an ammo round's flight, its landing and the damage it does are
+; all physics. 60/s is Godot's default, stated here because it is load-bearing.
+common/physics_ticks_per_second=60
+
 [rendering]
 
 renderer/rendering_method="gl_compatibility"

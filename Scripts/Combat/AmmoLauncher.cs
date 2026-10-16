@@ -92,6 +92,17 @@ public static class AmmoLauncher
 		}
 		parent.AddChild(instance);
 
+		// A node that could not enter the tree (Godot refuses AddChild while a
+		// parent is setting up children, and says so in the log) would leave a
+		// TurnEvent with nothing behind it — a turn that can never resolve. Report
+		// it and let the turn end instead.
+		if (instance.GetParent() != parent)
+		{
+			GD.PushError($"AmmoLauncher: '{unit.Id}' could not be added to {parent.Name} — the shot was not fired.");
+			instance.QueueFree();
+			return;
+		}
+
 		// Committing the turn: locks control until every event resolves.
 		gm.RegisterTurnEvent(turnEvent);
 	}

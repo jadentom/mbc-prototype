@@ -91,7 +91,7 @@ public partial class EnemyCombatant : NodeChainCombatant
 		_nextUnitIndex++;
 
 		_plannedAimAngle = ChooseAimAngle();
-		_plannedPowerPercent = (float)GD.RandRange(MinPowerPercent, MaxPowerPercent);
+		_plannedPowerPercent = Random.RandfRange(MinPowerPercent, MaxPowerPercent);
 
 		Preview(0f);
 		GD.Print($"[Enemy] Planning {_plannedUnit.DisplayName}: {Mathf.RadToDeg(_plannedAimAngle):0}°, power {_plannedPowerPercent:0.00}");
@@ -143,21 +143,21 @@ public partial class EnemyCombatant : NodeChainCombatant
 		Structure target = PickTarget(RootPosition);
 		if (origin == null || target == null)
 		{
-			return (float)GD.RandRange(-Mathf.Pi, Mathf.Pi);
+			return Random.RandfRange(-Mathf.Pi, Mathf.Pi);
 		}
 
 		Vector3 delta = target.GlobalPosition - origin.GlobalPosition;
 		Vector3 flat = new Vector3(delta.X, 0f, delta.Z);
 		if (flat.LengthSquared() < 0.0001f)
 		{
-			return (float)GD.RandRange(-Mathf.Pi, Mathf.Pi);
+			return Random.RandfRange(-Mathf.Pi, Mathf.Pi);
 		}
 
 		// The aim indicator points along +Z rotated by the aim angle, so the angle
 		// facing `flat` is atan2(x, z) — the inverse of AmmoLauncher's mapping and
 		// the same convention the player's aiming uses.
 		float toTarget = Mathf.Atan2(flat.X, flat.Z);
-		return toTarget + Mathf.DegToRad((float)GD.RandRange(-AimSpreadDegrees, AimSpreadDegrees));
+		return toTarget + Mathf.DegToRad(Random.RandfRange(-AimSpreadDegrees, AimSpreadDegrees));
 	}
 
 	/// <summary>The ground position used to measure "closest" when picking targets.</summary>
@@ -227,6 +227,16 @@ public partial class EnemyCombatant : NodeChainCombatant
 
 		return best;
 	}
+
+	/// <summary>
+	/// The match's seeded generator: every random choice this AI makes comes from
+	/// it, never from the global one, so the same seed and the same command log
+	/// give the same match (docs/parity M0.5).
+	/// </summary>
+	private static RandomNumberGenerator Random => GameManager.Instance?.Random ?? FallbackRandom;
+
+	/// <summary>Used only outside a match (a combatant in a test scene of its own).</summary>
+	private static readonly RandomNumberGenerator FallbackRandom = new RandomNumberGenerator();
 
 	/// <summary>Shows the shared aim arrow (and power meter) for the planned shot.</summary>
 	private void Preview(float powerPercent)
