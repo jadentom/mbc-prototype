@@ -17,17 +17,22 @@ prototype built with **Godot 4.5.1 (C#/.NET)**. Read this before editing.
 - Ground is a 10000×10000 plane (effectively infinite play space). The play
   area that matters today is around the origin; there is **no real map size
   yet**.
-- **This is a prototype for *MoonBase Commander* (2002), and there is a
-  roadmap for reaching feature parity with it**: [docs/parity](docs/parity/README.md)
-  is the plan and the architectural blockers, and
-  [docs/parity/units.md](docs/parity/units.md) is the original's eighteen units,
-  energy economy and world rules transcribed from the official manual. Read the
-  plan before starting work that the roadmap already sequences — it names the
-  foundations (data-driven unit definitions, the hit-point model, the cord
-  graph, the energy/round loop) that later features depend on. The plan's §1
-  also fixes the **scope**: a 1v1 match against one AI on one hardcoded map,
-  twelve of the eighteen units, no wind, no water, no multiplayer. Read that
-  scope before building anything the spec describes but the scope excludes.
+- **This prototype is the base for a *MoonBase Commander* (2002) spiritual
+  sequel** — a game of our own in the same genre, with the original as the
+  reference for how the mechanics should feel and its manual as the starting
+  dataset. [docs/parity](docs/parity/README.md) is the plan and the
+  architectural blockers; [docs/parity/units.md](docs/parity/units.md) is the
+  original's eighteen units, energy economy and world rules transcribed from the
+  manual. Read the plan before starting work that it already sequences — it
+  names the foundations (data-driven unit definitions, the hit-point model, the
+  cord graph, the energy/round loop) that later features depend on. Two things
+  about it matter before you write code:
+  - **Scope (§1):** a 1v1 match against one AI on one hardcoded map, twelve of
+    the eighteen units, no wind, no water, no multiplayer. Read it before
+    building anything the spec describes but the scope excludes.
+  - **Tunability (§2):** the original's numbers are an opening bid, not our
+    balance, and every gameplay number belongs in a resource a designer can
+    change — never a literal in a `.cs` file, never in two places at once.
 
 ## Build & run
 

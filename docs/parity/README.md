@@ -1,16 +1,22 @@
-# Feature parity with MoonBase Commander — the plan
+# From prototype to spiritual sequel — the plan
 
-How **MbcPrototype** gets from "a turn-based node-launching prototype" to a
-build where someone who knows the 2002 original can sit down and find the
-mechanics, units, rules and interface affordances they expect, behaving the way
-they remember.
+**MbcPrototype is not a remake of *MoonBase Commander*.** It is the
+systems-and-feel **base for a spiritual sequel**: a turn-based, cord-network
+artillery-strategy game of our own, using the 2002 original as the reference for
+what this genre's mechanics should feel like when they work. The original's
+manual is our starting dataset, and its numbers are a **first guess** — not a
+truth we are chasing.
+
+So this document plans the **base**: the systems, the data, the tuning workflow,
+and the first playable slice. It stops there. The sequel's own roster, balance,
+content, art and differentiation are deliberately *not* planned here — §11
+exists to say that and nothing more.
 
 Companion documents:
 
-- [units.md](units.md) — the original's eighteen units, the energy economy, the
-  cord rules and the world rules, transcribed from the official manual. It
-  documents the **original in full**, including the parts §1 cuts. Use it as the
-  reference for the twelve units we build; do not read it as the scope.
+- [units.md](units.md) — the original's roster, economy, cord rules and world
+  rules, transcribed from the official manual. Reference data and a starting
+  balance, **not** a specification of our game.
 - [../camera/README.md](../camera/README.md) — the existing camera/minimap
   documentation, which the map work below will rewrite.
 - [../../AGENTS.md](../../AGENTS.md) — the project guide; keep it in step as
@@ -18,55 +24,57 @@ Companion documents:
 
 ---
 
-## 1. What we are building
+## 1. What this is for
+
+### What the base must be
+
+Three properties, in priority order. When they conflict, the higher one wins.
+
+| the base must be | because |
+| --- | --- |
+| **playable early** | everything we learn about this genre comes from playing it. A system we cannot play is a system we cannot judge. |
+| **tunable without code** | every number will change, repeatedly, during balancing and iteration (§2). If changing one means an edit, a rebuild and a merge, iteration stops happening. |
+| **expandable without rework** | more players, maps and units than the first slice must arrive as *content*, not as a refactor. |
+
+Note what is deliberately **not** on that list: *faithful*. The original is a
+reference bar, not a deliverable. A decision that makes iteration slower is the
+wrong decision even when it is the more faithful one.
+
+### The first playable slice
 
 **One 1v1 match: one human against one AI, on one hardcoded map.** That is the
-whole committed scope. Everything else in this document either serves that or is
-explicitly deferred.
-
-Parity is a direction, not a promise. Four bars, in the order they are worth
-reaching:
-
-| bar | meaning | reached when |
-| --- | --- | --- |
-| **Rules parity** | same mechanics, same numbers, same edge cases | a player's expectations about *what happens* are never wrong |
-| **Content parity** | the twelve in-scope units, the terrain and the pools | a player's favourite strategy **within the subset** exists |
-| **Mode parity** | 1v1 setup, replays, one map | a player can play the way they used to |
-| **Presentation parity** | HUD layout, key commands, damage feedback, audio | the game *reads* the same at a glance |
-
-Full content parity — eighteen units, four-player games, teams, challenge
-missions, internet play — is **not** a goal. See the cut list below.
-
-### In scope
+whole committed scope of the base. Everything else in this document either
+serves that or is explicitly deferred.
 
 | area | decision |
 | --- | --- |
 | **Players** | two, 1v1: one human and one AI. No teams. |
-| **Map** | **one hardcoded map** for the whole of development. The map editor is the last milestone (M9). |
-| **Units** | **twelve** of the original's eighteen — see [The twelve units](#the-twelve-units). |
+| **Map** | **one hardcoded map** for the whole of development. The map editor is the last milestone (M9); until then, authoring content is not the bottleneck, iterating on balance is. |
+| **Units** | **twelve** of the original's eighteen — see [the starting roster](#the-twelve-units). Every one of their numbers is provisional. |
 | **AI** | **one** opponent planner. Personalities (the original's ten BOTs) are later data, not now. |
 | **World** | a height field with three terrain states, and a **wrapping map**. |
 | **Fog** | yes, as a game option — it is what makes the Spy Balloon worth building. |
-| **Energy & rounds** | the 1/3/7 economy, max 35, per-round refill, rotating player order. |
-| **Cords** | the full spatial rules: cord geometry, no overlap, reach, cascade, lineage lights. |
-| **Fidelity** | rules parity where it can be measured. Art and audio are ours — the original's assets are not redistributable. |
+| **Energy & rounds** | the 1/3/7 economy, max 35, per-round refill, rotating player order. Provisional like everything else. |
+| **Cords** | the full spatial rules: cord geometry, no overlap, reach, cascade, lineage lights. This is the mechanic the whole genre rests on, so it is worth getting structurally right before tuning it. |
+| **Fidelity** | the original's *feel* is the reference; its numbers are the opening bid. Art and audio are ours — its assets are not redistributable. |
 
-### Cut, and what cutting it costs
+### Cut from the first slice
 
-Each of these is a decision, not an oversight. The right-hand column is what
-disappears with it, so nobody rediscovers it later and treats it as a bug.
+Each of these is a decision about the first slice, not a verdict on the sequel.
+The right-hand column is what disappears with it, so nobody rediscovers it later
+and treats it as a bug.
 
 | cut | why | what it costs |
 | --- | --- | --- |
-| **Wind** | not wanted | one option, and shots that bend. Nothing else depends on it. |
-| **Water** | not wanted | the fourth terrain state; **Bridges**; structures being destroyed by landing in water; the Crawler's ability to travel under water. Terrain becomes a height-and-cover puzzle instead of a river-crossing one. |
-| **GameSpy-era multiplayer** (lobbies, LAN discovery, chat addressing, mid-match drops) | period infrastructure, and premature while the mode itself is 1v1 | nothing today. The command log (§3, M0.5) keeps the door open — see *Built for expansion*. |
+| **Wind** | not wanted in the first slice | one option, and shots that bend. Nothing else depends on it. |
+| **Water** | not wanted in the first slice | the fourth terrain state; **Bridges**; structures being destroyed by landing in water; the Crawler's ability to travel under water. Terrain becomes a height-and-cover puzzle instead of a river-crossing one. |
+| **GameSpy-era matchmaking** (its lobbies, its chat addressing, its discovery model) | period infrastructure. If the sequel wants network play it will be designed for the sequel, not for 2002's service. | nothing today. The command log (§4, M0.5) is what keeps that door open — see *Built for expansion*. |
 | **Three- and four-player games, and teams** | 1v1 first | shared line of sight, allied interception rules, side bars for defeated players. |
-| **The other six units** (Bridge, Tower, Mines, Reclaimer, Offensive Unit, Virus) | the roster is trimmed to what the 1v1 game needs | see *The six units we are not building*, below and in M4 |
+| **The other six units** (Bridge, Tower, Mines, Reclaimer, Offensive Unit, Virus) | the roster is trimmed to what the first slice needs | see *The six units we are not building*, below and in M4 |
 | **Challenge mode** (16 missions) | single-player content that needs the mission format and authored maps | the ladder and its efficiency bonuses. |
 | **Factions, music, voice commentary** | cosmetic or unshippable | nothing mechanical: factions differ only in art, and every faction has the same eighteen units. |
 
-### Built for expansion, not built yet
+### Built for expansion
 
 Only 1v1 ships, but the following must hold from M0 — retrofitting them later is
 what makes "we'll add players later" expensive:
@@ -76,47 +84,108 @@ what makes "we'll add players later" expensive:
 - `Combatant.Team` stays, and both the rotation and the defeat check stay
   team-aware, even though every game today is one team each;
 - units are **data** (`UnitDefinition` in a catalog) and the map is a
-  **resource**, so a second player, a second map and later a second launcher are
-  content rather than code;
-- the **command log** is player-agnostic and serializable, which is what a
-  future network layer would need;
-- no code may assume "the enemy" is a single object.
+  **resource**, so a second player, a second map, a second launcher and a whole
+  second roster are content rather than code;
+- a unit's behaviour lives on a scene behind a small interface, so a *new* unit
+  is a definition plus a behaviour, not a new branch in a launcher;
+- the **command log** is player-agnostic and serializable;
+- no code may assume "the enemy" is a single object, or that a match has exactly
+  two of anything.
 
-### Where numbers are unknown
+### What we take from the original
+
+Four reference bars. They are how we know the base is *sound* — not a promise
+about what we ship. Reaching them means the mechanics work; matching the
+original's numbers is explicitly not the goal.
+
+| bar | meaning | reached when |
+| --- | --- | --- |
+| **Rules** | the same mechanics and edge cases exist and behave sensibly | a player who knows the genre is never surprised by *what happens* |
+| **Content** | the twelve units, the terrain and the pools exist | a player's favourite strategy **within the subset** is possible |
+| **Mode** | a 1v1 match can be set up, played and watched back | the base is playable end to end |
+| **Presentation** | HUD layout, key commands, damage feedback | the game *reads* at a glance |
+
+Full content parity — eighteen units, four-player games, teams, challenge
+missions, internet play — is not a goal; see §11.
+
+### Where the numbers come from
 
 The manual publishes hit points, damage, energy costs and the objective. It does
-**not** publish launch ranges, cord lengths, the blast falloff curve, pool
-sizes, terrain heights or bot personalities. Those are "tuned to feel" and
-belong in one tuning table (§6). Do not scatter them.
+**not** publish launch ranges, cord lengths, the blast falloff curve, pool sizes,
+terrain heights or bot personalities. Both kinds are provisional: the first is a
+reasonable opening bid, the second a guess. All of them live in data and are
+listed in one place — §2 and §7. Do not scatter them, and do not treat a number
+being "from the manual" as a reason it cannot change.
 
 ---
 
-## 2. Where the prototype stands
+## 2. Tunability — the load-bearing requirement
+
+**Every gameplay number will change, repeatedly, and changing one must be
+cheap.** That is not a nicety about this genre; it is the whole point of building
+a base rather than a game. Balance is found by iterating, and iteration is what
+the sequel will spend most of its time doing.
+
+Concretely, four rules. They are not aspirations; they are what M0.7 and §7 are
+for.
+
+1. **No gameplay number in a `.cs` file.** Hit points, damage, blast radii,
+   energy costs, income, launch ranges, cord reach, vision radii, the clock, the
+   energy cap — all of it lives in a Godot `Resource` a designer can open and
+   edit.
+2. **One home per number.** A number that exists in two places is a bug, because
+   sooner or later the two disagree. Today's four `EnemyCombatant` knobs are
+   exported on `GameManager` *and* injected at construction: that duplication is
+   the pattern to delete, not to copy.
+3. **A number must be changeable without a rebuild**, and ideally without a
+   restart. Resources are editable in the editor and reloadable at runtime;
+   M0.7 adds a dev overlay that edits live values in a running match and dumps
+   them back into the resource. If a balance change takes longer than the change
+   is worth, it will not get made.
+4. **Derived values are functions, not constants.** Effective launch range on a
+   slope, damage at a distance, income at the end of a round: computed from the
+   data, never a second hand-maintained number.
+
+Defaults in code are allowed for exactly one reason — the project must still run
+with no assets — and those defaults are fallbacks, never the source of truth.
+
+**What this buys us.** Because the whole game state is a function of (map, seed,
+command log) from M0.5, a replay exercises the live numbers: change a damage
+value, replay a recorded match, and see what changed. Balance iteration becomes
+"edit, replay, compare" instead of "edit, rebuild, play for ten minutes, hope".
+
+**Where each number lives** is §7 — one table, every tunable value, its home and
+its current starting value.
+
+---
+
+## 3. Where the prototype stands
 
 Verified against the code today. The right-hand column is the gap this plan
 closes; the **size** column is a rough ordering device, not a promise.
 
-| system | original | prototype today | size |
+| system | reference | prototype today | size |
 | --- | --- | --- | --- |
 | **Objective** | destroy the opponent's **main Hub** | destroy the enemy chain's root — `GameManager.EvaluateGameOver()` treats "no root" as defeat | ✅ aligned |
 | **Cord network** | the spatial system: reach, overlap rules, cord nodes, cascade, lights | implicit parent/child links only (`BaseNode.ParentBase`/`Children`, `CableShader`). No cord geometry, no reach, no overlap test, no cord nodes | **XL** |
 | **Durability** | **hit points** per unit type (the manual's *Armor* column), damage subtracted, partial damage normal | integer HP, but **one number for every node**: `BaseNode.MaxHealth = 6` | **M** |
-| **Blast damage** | a weapon damages what it strikes **and** what is near it, with a falloff the manual never publishes | a two-band blast in `Bomb.ApplyBlastDamage()` (full inside 1.5 units, half to 3), with damage 2/1 rather than the Bomb's damage 3 | **M** — the shape is a model, the numbers are invented |
+| **Blast damage** | a weapon damages what it strikes **and** what is near it, with a falloff curve nobody published | a two-band blast in `Bomb.ApplyBlastDamage()` (full inside 1.5 units, half to 3), with damage 2/1 rather than the Bomb's 3 | **M** — fine as a first guess, wrong as hardcoded fact |
 | **Energy** | 1/3/7 per unit, max 35, per-round refill, income units | none | **L** |
 | **Turn model** | a turn is an energy budget; round ends when all have spent or skipped; order rotates left | one launch per turn; `CurrentTurn` counts rotation wraps | **L** |
 | **Units** | 18, three levels | 2: `AmmoType { Node, Bomb }`, hardcoded in `AmmoLauncher.Launch()` (`gm.ProjectileScene` / `gm.BombScene`) | **XL** |
+| **Tunability** | (our own requirement, §2) | every number is a C# field default, four of them in two places at once, and `main_scene.tscn` overrides no tuning value at all. Changing one means a rebuild | **M** |
 | **Players** | up to 4, teams, shared line of sight | exactly 2, hardcoded in `GameManager.CreateCombatants()` | **M** — generalise the shape, not the count |
-| **Map** | authored, sized, four terrain states, water, wrap-around | flat 10000×10000 plane; play area approximated by `MinimapWorldSize = 475` | **XL** |
-| **Terrain height** | Water/Ground/Plateau/Mountain; height changes launch range | none — everything sits at y=0 | **M** — three states, not four (water is cut) |
+| **Map** | authored, sized, terrain states, wrap-around | flat 10000×10000 plane; play area approximated by `MinimapWorldSize = 475` | **XL** |
+| **Terrain height** | height changes launch range | none — everything sits at y=0 | **M** — three states, not four |
 | **Purple pools** | energy pools; size determines how many Harvesters fit | `PoolField` scatter, decorative, `PoolAt`/`OverlappingPools` written but **never called** | **S** |
-| **Fog / vision** | option; black unseen terrain; Hub and Balloon vision | none | **L** |
+| **Fog / vision** | unseen terrain black; Hub and Balloon vision | none | **L** |
 | **Anti-air / shields / EMP** | interception and disable | none | **L** |
-| **AI** | 10 BOTs with distinct play styles | one `EnemyCombatant`: random aim in a 25° cone, random power, alternates node/bomb | **L** — one good planner, not ten |
-| **Modes** | Skirmish, Challenge (16 missions), LAN, GameSpy | one hardcoded skirmish | **M** — a 1v1 setup screen |
-| **Map editor** | size, terrain states, pools, starting positions, save/load/share | none | **L** — **last** (M9) |
-| **Replays / stats** | Replay Theatre + 7-stat game summary | none; no serialization of game state at all | **L** |
+| **AI** | opponents that play differently | one `EnemyCombatant`: random aim in a 25° cone, random power, alternates node/bomb | **L** — one good planner, not ten |
+| **Modes** | skirmish setup | one hardcoded skirmish | **M** — a 1v1 setup screen |
+| **Map editor** | size, terrain, pools, starting positions, save/load/share | none | **L** — **last** (M9) |
+| **Replays / stats** | Replay Theatre + game summary | none; no serialization of game state at all | **L** |
 | **HUD / keys** | energy bar, build menu, HUD bar, D/R/C/N/P/L/A/Tab keys | power bar, two ammo icons, turn label, win/lose labels; `fire_shot`, `aim_left/right`, `switch_ammo_next/previous` | **M** |
-| **Audio** | dynamic music, voice commentary, SFX and 4 volume channels | nothing at all; the repo has no audio assets | **S** — placeholder SFX only |
+| **Audio** | music, voice, SFX and volume channels | nothing at all; the repo has no audio assets | **S** — placeholder SFX only |
 
 ### The architectural blockers
 
@@ -127,17 +196,17 @@ retrofitting any of them after the content exists costs several times more.
 1. **Units are code, not data.** `AmmoType` is a two-value enum and
    `AmmoLauncher.Launch()` is an `if/else` over two `PackedScene` fields — with a
    `// TODO: Switch this to inheritance and use an interface` already sitting on
-   line 62. Twelve units with hit points, cost, level, launch rules, vision
-   radius and build permissions cannot live in a `switch`.
+   line 62. Twelve units cannot live in a `switch`, and neither can the tuning
+   that goes with them.
 2. **Durability is one hardcoded number and the blast curve is invented.**
    `BaseNode.MaxHealth = 6` is the same for every node and is reverse-engineered
    from this repository's own bomb (three direct hits, "a half hit is a whole
    point"), not from the original, where the Hub has 5 hit points, the Spy
-   Balloon 1, and damage is the manual's flat 3 for a Bomb. The two-band blast
-   is our model of a curve the manual does not publish; it has to live in the
-   unit definition as a labelled guess instead of in `Bomb.cs` as a fact.
+   Balloon 1, and a Bomb does a flat 3. The two-band blast is our *model* of a
+   curve the manual never published: legitimate as a first guess, wrong as a
+   constant inside `Bomb.cs`.
 3. **There is no cord graph.** Build legality, the destruction cascade, Power
-   Spike, EMP's reach along a network and the Hub lineage lights are all cord
+   Spike, EMP's reach along a network and the lineage lights are all cord
    operations. Today "chain" is an ad-hoc parent pointer.
 4. **There is no round/energy model, and a turn is exactly one shot.** The turn
    system in `GameManager` (`RegisterTurnEvent` / `CompleteTurn` /
@@ -150,18 +219,16 @@ retrofitting any of them after the content exists costs several times more.
    standing in for bounds is already flagged in `AGENTS.md` and in the camera
    doc's *Scaling seam* section as the thing to replace. Even one hardcoded map
    needs a resource to hardcode.
-6. **No determinism, no serialization.** Replays, save/load and regression
-   testing all need the same missing thing: a game state that is a function of a
-   seed plus an ordered command list — and it is what keeps a future second
-   player cheap.
+6. **No determinism, no serialization.** Replays, save/load, regression testing
+   and painless balance iteration all need the same missing thing: a game state
+   that is a function of a seed plus an ordered command list.
 7. **`GameManager.cs` is a 1355-line god object** owning turn flow, aiming,
    combatant creation, camera, minimap, pools and input. It will not survive
    contact with twelve units.
 8. **Tuning lives in code, and sometimes twice.** Every gameplay number is a C#
-   field default — `main_scene.tscn` overrides no tuning value at all — and the
-   four `EnemyCombatant` knobs are *also* exported on `GameManager` and injected
-   at construction, so the same numbers exist in two places. Doubling that
-   across twelve units is not survivable.
+   field default, and the four `EnemyCombatant` knobs are *also* exported on
+   `GameManager`, so the same numbers exist in two places. §2 makes this the
+   first thing to fix, not the last.
 9. **Single-player is baked in.** `_playerCombatant` is one field read directly
    by the defeat check, and the enemy's start position is derived from the
    camera's size and the window aspect — not from a map. Both have to go, and
@@ -169,10 +236,12 @@ retrofitting any of them after the content exists costs several times more.
 
 ---
 
-## 3. Milestones
+## 4. Milestones
 
 Each milestone ends with **exit criteria** that are checkable, not vibes. Order
-is dependency order, except where noted as parallelisable.
+is dependency order, except where noted as parallelisable. The exit criteria ask
+"does this system work, and can we tune it?" — never "does it match the
+original?".
 
 ### M0 — Foundations
 
@@ -188,20 +257,20 @@ is cheap because of it.
   in a **catalog** (also a resource) so the HUD, the launcher and a future
   scenario all read the same list.
 - **M0.2 — Hit points and the blast curve.** Move durability into the
-  definition: **hit points per unit type**, from the manual's *Armor* column
-  (Hub 5, Harvester 5, Anti-Air 3, Shield 3, Crawler 3, Repair 1, Balloon 1).
-  Delete the "MaxHealth = 6 because a half hit is a whole point" reasoning in
-  `BaseNode.cs` and the one-number-for-everything default.
+  definition: **hit points per unit type**, starting from the manual's *Armor*
+  column (Hub 5, Harvester 5, Anti-Air 3, Shield 3, Crawler 3, Repair 1,
+  Balloon 1). Delete the "MaxHealth = 6 because a half hit is a whole point"
+  reasoning in `BaseNode.cs` and the one-number-for-everything default.
   - Damage is a **flat integer subtracted from the target's hit points**: a Bomb
     (damage 3) against a Hub (5) leaves 2, and partial damage is normal. There
     is **no armor threshold** — nothing in the original says damage that fails
-    to exceed a unit's armor does nothing, and the earlier draft of this plan
+    to exceed a unit's armor does nothing, and an earlier draft of this plan
     claimed otherwise. Read "Armor" in [units.md](units.md) as *hit points*.
   - A weapon also damages what is **near** where it goes off, with a falloff the
     manual does not publish. The existing two-band model (full damage inside
-    `DirectHitRadius`, half out to `OuterRadius`) is a fine *model*, but it is
-    ours: move the radii into unit definitions and label them in the tuning
-    table (§6), and give the Bomb the manual's damage 3 rather than today's 2.
+    `DirectHitRadius`, half out to `OuterRadius`) is a fine opening guess: move
+    the radii into unit definitions and the curve into the match rules, and give
+    the Bomb the manual's damage 3 rather than today's 2.
 - **M0.3 — Structure vs. cord split.** `BaseNode` currently means both "a unit"
   and "the link in the network". Split into a `Structure` (hit points, ownership,
   vision, build permission, the cords it hangs from and anchors) and `Cord` (the
@@ -210,29 +279,37 @@ is cheap because of it.
 - **M0.4 — Map resource, and the development map.** A `MapDefinition` holding
   bounds, a height field, the terrain states, energy pools (with size), and the
   two **start positions** for a 1v1 match. Ship exactly one, hardcoded, as the
-  map every milestone is developed and tested on. `GetMinimapWorldRect()` and
-  `CreateMinimap()`'s camera size come off it — that is exactly the *Scaling
-  seam* the camera doc already specifies. Move `PoolField`'s scatter to generate
-  into the map rather than onto the plane, and take the start positions from it
-  instead of from the camera and window aspect.
+  map every milestone is developed and tuned on. `GetMinimapWorldRect()` and
+  `CreateMinimap()`'s camera size come off it — exactly the *Scaling seam* the
+  camera doc already specifies. Move `PoolField`'s scatter to generate into the
+  map rather than onto the plane, and take the start positions from it instead
+  of from the camera and window aspect.
 - **M0.5 — Command log & determinism.** Every player and AI action becomes a
   serializable command appended to an ordered log; simulation advances only by
-  applying commands. Fixed timestep for physics-affecting steps. This is the
-  prerequisite for replays (M7), regression testing (§5) and any future second
-  player.
+  applying commands. Fixed timestep for physics-affecting steps. This is what
+  makes replays (M7), regression testing (§6) and iteration-on-a-replay (§2)
+  possible.
 - **M0.6 — Split `GameManager`.** Turn flow, camera/minimap, map/world, and
   match setup become separate nodes, and the match stops knowing how many
   combatants there are. Keep `GameManager.Instance` during the transition so
   call sites do not all change at once.
+- **M0.7 — Tuning data and the dev overlay.** All the numbers from §7 in
+  resources — a `MatchRules` resource for the global ones, per-unit values in
+  their definitions, world values in the map — with the code's literals deleted
+  and every duplicate collapsed to one home. Then a **dev overlay** that edits
+  live values during a match and writes them back to the resource, so a balance
+  change is seconds of work and not a rebuild.
 
-**Exit criteria:** the game still plays as it does today, on the development
-map, with the two existing units — and a match is fully described by (map, seed,
-command log) and replays identically from it.
+**Exit criteria:** the game still plays as it does today, on the development map,
+with the two existing units; a match is fully described by (map, seed, command
+log) and replays identically from it; and **a damage value can be changed and
+felt without touching a `.cs` file or restarting the editor**.
 
 ### M1 — The core loop: energy, rounds, turns, build menu
 
-This is the milestone that makes it *MoonBase Commander* rather than a
-projectile duel, and it is worth doing before more units.
+This is the milestone that makes it *this genre* rather than a projectile duel,
+and it is worth doing before more units. Every number below is a starting value
+from §7, not a target.
 
 - Energy pool per player: current, next-round income, **maximum 35**.
 - Unit cost = level = 1/3/7; spending energy replaces "one launch per turn".
@@ -253,10 +330,12 @@ projectile duel, and it is worth doing before more units.
 > current round" (plural). The natural reading is: one turn per player per round,
 > in which you may launch repeatedly until your energy is gone. Confirm against
 > the shipped game before building the turn loop, because the two readings
-> produce different UIs (a persistent build menu vs. a one-shot launcher).
+> produce different UIs (a persistent build menu vs. a one-shot launcher). If it
+> is genuinely ambiguous, pick the one that is easier to tune and revisit.
 
 **Exit criteria:** a full round can be played with correct income, spend,
-carry-over and rotation, with no units other than **Hubs and Harvesters**.
+carry-over and rotation, using no units other than **Hubs and Harvesters** — and
+the income and cost numbers can be changed from data while the match runs.
 
 ### M2 — The cord network
 
@@ -268,48 +347,55 @@ The spatial rules that make the map a puzzle.
   existing cord, or if the target site is outside reach.
 - **Reach is a property of the launcher, not of the network.** A structure must
   be launched from a structure already in your network, and how far that
-  launcher throws is its own number (§6). Nothing increases it. Expansion works
-  because **a Hub can build another Hub**, and each new Hub is itself a launcher
-  standing further out: the network grows one Hub hop at a time.
+  launcher throws is its own tunable number (§7). Nothing increases it.
+  Expansion works because **a Hub can build another Hub**, and each new Hub is
+  itself a launcher standing further out: the network grows one Hub hop at a
+  time.
   - Note this for the record: the **Tower grants vision only** in the original —
     it does not extend cord reach. An earlier draft of this plan had it
-    backwards. (The Tower is out of scope anyway, but the reason matters: no
-    in-scope unit grants reach, so reach must work from launchers alone.)
+    backwards. (The Tower is out of the first slice anyway, but the reason
+    matters: no in-scope unit grants reach, so reach has to work from launchers
+    alone.)
 - **Hub destruction cascade** over the cord graph — destroying a Hub destroys
   everything built by it, recursively, including other Hubs. Note the current
   implementation waits **1.0 s per generation** (`BaseNode.Destroy()`), so a
   realistic network of 40-odd units would take tens of seconds to collapse and
   would hold the turn open the whole time via `TurnEvent`. The cascade needs to
   fan out concurrently, or be resolved as a graph operation with one animation
-  budget — this is a parity *and* a pacing problem.
+  budget — this is a pacing problem, not a parity one.
 - **Lineage lights**: cord lights blink toward the main Hub, so a player can
   trace an opponent's network back to its origin. Today's `CableShader` is the
   canvas for this.
-- **Power Spike** travel: damage down both directions, tapering, dead after 50
-  cord nodes. (The travel lives here because it is a cord operation; the unit
-  that fires it is M4.)
+- **Power Spike** travel: damage down both directions, tapering, dead after a
+  tunable number of cord nodes (50 in the original). The travel lives here
+  because it is a cord operation; the unit that fires it is M4.
 
 **Exit criteria:** you cannot build outside reach, cords visibly refuse to
-overlap, and killing a Hub takes its whole subtree with it.
+overlap, and killing a Hub takes its whole subtree with it — with reach and cord
+spacing tunable per launcher.
 
 ### M3 — Terrain and the wrapping world
 
 - Height field with **three** states — **Ground, Plateau, Mountain**. The
-  original's fourth state, **Water, is cut** (§1): with it go Bridges, structures
-  destroyed by landing in water, and the Crawler's water travel.
+  original's fourth state, **Water, is out of the first slice** (§1): with it go
+  Bridges, structures destroyed by landing in water, and the Crawler's water
+  travel.
 - The rule that new units must land on **flat ground** (a structure landing on a
   hillside is destroyed on impact).
 - **Height changes launch range**: shots from high ground go farther, and shots
-  *uphill* fall short. This is the mechanic that makes terrain a weapon.
+  *uphill* fall short. The height→range relationship is one tunable curve, not a
+  per-state constant — it is exactly the kind of number that will be rebalanced
+  twenty times.
 - **Wrapping map**: leaving one edge re-enters on the other, in all
   world↔map maths — minimap, camera bounds, distance queries, cord reach, AI
   targeting. Wrapping is a cross-cutting concern, not a boundary condition: do
   it here or fight it forever.
 
 **Exit criteria:** the development map, given a mountain and a plateau, plays
-differently from a flat one, and nothing breaks at the map seam.
+differently from a flat one; nothing breaks at the map seam; and terrain heights
+and the height→range curve are data.
 
-### M4 — The twelve units
+### M4 — The starting roster: twelve units
 
 Implemented in dependency order, not level order, because units share
 subsystems. Build the subsystem, then the units that use it.
@@ -328,7 +414,9 @@ subsystems. Build the subsystem, then the units that use it.
 
 #### The twelve units
 
-Our names on the left, the manual's on the right; levels are the energy cost.
+Our names on the left, the manual's on the right. Levels, hit points and damage
+are the **opening bid** from the manual — first values to iterate from, all of
+them living in the unit's definition (§2, §7).
 
 | unit | manual name | level | HP | damage | what makes it work |
 | --- | --- | --- | --- | --- | --- |
@@ -339,7 +427,7 @@ Our names on the left, the manual's on the right; levels are the energy cost.
 | **Missile** | Guided Missile | 3 | — | 3 | homing engages at the apex and flies at the closest enemy unit; a Bomb's damage if it arrives |
 | **Balloon** | Spy Balloon | 3 | 1 | — | vision without a cord; anything that touches it destroys it |
 | **EMP** | EMP | 3 | — | 2 | disables everything in a radius for one turn cycle; radius **larger than Anti-Air's or a Shield's** |
-| **Spike** | Power Spike | 3 | — | 3 | travels a cord in both directions, tapering, dead after 50 cord nodes |
+| **Spike** | Power Spike | 3 | — | 3 | travels a cord in both directions, tapering, dying after a set number of cord nodes |
 | **Crawler** | Crawler | 7 | 3 | 4 | moves between rounds in birth order, slips under shields, detonates only against an enemy unit or cord |
 | **Harvester** | Energy Collector | 7 | 5 | — | 3 energy/round on a pool, 1 off it; **explodes violently when destroyed** |
 | **Hub** | Hub | 7 | 5 | — | the only launcher, and the only unit that builds everything; only the **main** Hub generates energy |
@@ -356,7 +444,7 @@ What each one takes with it:
 - **Offensive Unit** — the second launcher, the weapons-only build list, and its
   "nearly twice a Hub" throw. **The Hub is now the only launcher**: reach is the
   Hub's, and `BuildPermission` has one entry that matters. Keep the mechanism —
-  a second launcher should be data, later.
+  a second launcher should be data, and it is a likely sequel addition.
 - **Virus** — the cord-hopping disable. EMP is the only disable in the game.
 - **Mines** — area denial, and the reason to watch where your units stand.
 - **Reclaimer** — the only unit that turns absorbed hit points into energy.
@@ -365,8 +453,9 @@ What each one takes with it:
 
 **Exit criteria:** each of the twelve is buildable and behaves as described,
 including its stated exceptions (the Anti-Air reload, the Crawler's detonation
-condition, the Shield passing friendlies, the Balloon dying to a touch), and the
-six cut units appear nowhere in the catalog.
+condition, the Shield passing friendlies, the Balloon dying to a touch); the six
+cut units appear nowhere in the catalog; and adding a thirteenth unit is a
+definition plus a behaviour rather than a code change in the launcher.
 
 ### M5 — Fog and vision
 
@@ -378,7 +467,7 @@ six cut units appear nowhere in the catalog.
 - Vision must compose with M3's wrapping, which is the fiddly part.
 
 **Exit criteria:** a fog game is genuinely about scouting, and a Balloon placed
-forward is worth its 3 energy.
+forward is worth its cost.
 
 ### M6 — The AI, and the 1v1 match setup
 
@@ -393,11 +482,13 @@ forward is worth its 3 energy.
   budgeting across the round, expansion by building Hubs outward, Harvesters on
   pools, cord-space management, threat response (it should notice an incoming
   Cluster and answer with Anti-Air), and a bias toward killing the main Hub.
-  Personality is **not** in scope: when the original's ten BOTs arrive they
-  should be a weights resource, not ten subclasses.
+  Its weights live in a resource (§2), because tuning the AI is balance work
+  too. Personalities are **not** in scope: when more opponents arrive they
+  should be weight sets, not subclasses.
 
 **Exit criteria:** a 1v1 fog game against the AI runs to a correct conclusion —
-the AI spends its energy sensibly, expands, and can win and lose.
+the AI spends its energy sensibly, expands, and can win and lose — and its
+aggression is tunable without a rebuild.
 
 ### M7 — Replays, save/load and the game summary
 
@@ -406,24 +497,27 @@ the AI spends its energy sensibly, expands, and can win and lose.
   **nearly transparent** in replay so you can see the whole map while still
   understanding where Balloons went.
 - **Save/load** of an in-progress match, from the same command log.
-- **Game summary**: Units built, Energy generated, Shots, Hits (drawing
-  anti-air fire explicitly does **not** count), Destroyed, Accuracy, Bonus.
+- **Game summary**: Units built, Energy generated, Shots, Hits (drawing anti-air
+  fire explicitly does **not** count), Destroyed, Accuracy, Bonus.
+
+Replays are not only a feature: they are the iteration loop from §2. A replay is
+what makes a balance change reviewable.
 
 **Exit criteria:** any finished match can be saved and replayed frame-accurately,
-and the summary numbers are right.
+the summary numbers are right, and a tuning change shows up in a replay.
 
-### M8 — Presentation and interface parity
+### M8 — Presentation and interface
 
 - **HUD bar**: time, current player's turn, **player order** (which visibly
   shifts left each round), and the **Next Round Energy** indicator.
-- **Energy bar** with its numeric readout and the 35 cap (today's `PowerBar` is
-  a different thing — the launch meter — and both must coexist).
+- **Energy bar** with its numeric readout and the energy cap (today's `PowerBar`
+  is a different thing — the launch meter — and both must coexist).
 - **Hub scrolling**: Next Unit, Previous Unit, Center Current Unit.
 - **Key commands**: Damage Bar (**D**), Range Radius (**R**), Center Unit
   (**C**), Next Unit (**N**), Previous Unit (**P**), Closest Launcher (**L**),
   Show Attacked (**A**), plus a **remappable controls** screen. None of these
   exist today, and **R** (anti-air and shield range display) is genuinely
-  load-bearing for play.
+  load-bearing for play — and becomes more so as those radii are tuned.
 - **Navigation**: right-drag to scroll, left-click to select, drag a unit to
   scroll, click a unit's picture to re-center, click a cord to jump to the unit
   at its far end, arrow keys to scroll.
@@ -433,36 +527,44 @@ and the summary numbers are right.
 - **Damage feedback**: damage bar and the **smoke colour that encodes severity**.
 - **Audio**: **placeholder SFX only** — launch, impact, explosion, anti-air
   fire, structure destroyed, UI click — plus **one master volume** and a mute.
-  No music, no voice, no commentary, and therefore no per-channel volume mixing.
+  No music, no voice, no commentary. Placeholders are ours and are meant to be
+  replaced; pick neutral ones so a change of art does not force a re-tune.
 
-**Exit criteria:** a returning player's hands work without being told.
+**Exit criteria:** a player who knows the genre can drive the game without being
+told, and the numbers on screen match the tuning data.
 
 ### M9 — The map editor and authored maps
 
 Last by decision, not by dependency: the whole of development runs on the one
-hardcoded map from M0.4, so nothing before this milestone waits on it.
+hardcoded map from M0.4, and iterating on balance does not need a second map.
 
 - **Map editor**: map size, the three terrain states, energy pools of varying
   size, and **starting positions** — validated for 1v1 as a pair of positions,
-  with the setting left open for the original's larger icon sets.
-- Clear / load / save, and planet/terrain selection.
+  with the setting left open for larger icon sets.
+- Clear / load / save, and terrain/planet selection.
 - **Authored maps**: the editor's output is what the game loads, and the
-  hardcoded development map becomes just the first entry in that set rather than
-  a special case in code.
+  hardcoded development map becomes the first entry in that set rather than a
+  special case in code.
 
-**Exit criteria:** a player can build a map, save it, play it, and play 1v1 on it
-against the AI.
+This is where the prototype stops being a base and becomes a *tool*: the sequel
+needs to author content far faster than we can write it in C#, and this is the
+milestone that unlocks that. It is last because until the systems and their
+numbers have settled, authored content would be built on sand.
+
+**Exit criteria:** a player can build a map, save it, play 1v1 on it against the
+AI, and keep it as part of a growing map set.
 
 ---
 
-## 4. What can run in parallel
+## 5. What can run in parallel
 
 The critical path is M0 → M1 → M2 → M3 → M4. After M0 lands, three tracks can
 proceed independently and only meet at M6:
 
 - **Content track:** M1 → M4 (units), M5 (fog/vision).
 - **World track:** M2 → M3.
-- **Platform track:** M0.5 → M7 (replays/summary).
+- **Platform track:** M0.5 → M7 (replays/summary), which is also the iteration
+  tooling.
 
 M6 needs the content and world tracks. M8 can be interleaved anywhere from M1
 onward, since the HUD work is mostly independent of simulation. M9 is last by
@@ -470,90 +572,100 @@ decision.
 
 ---
 
-## 5. Cross-cutting engineering work
+## 6. Cross-cutting engineering work
 
-**Determinism.** M0.5's command log is the spine: replays, save/load and
-regression testing all consume it, and it is what would keep a second human
-player from being a rewrite. Budget for it properly — rounding in the ballistic
-solver, physics timestep, and iteration order over structures are all places
-where non-determinism creeps in, and it is far cheaper to keep determinism than
-to restore it.
+**Tunability.** §2 is a cross-cutting requirement, not a milestone feature:
+every milestone below adds numbers, and every one of them has to land in data
+with one home and no rebuild to change it. M0.7 sets the pattern; the rest
+follow it.
+
+**Determinism.** M0.5's command log is the spine: replays, save/load, regression
+testing and replay-driven balance iteration all consume it. Budget for it
+properly — rounding in the ballistic solver, physics timestep, and iteration
+order over structures are all places where non-determinism creeps in, and it is
+far cheaper to keep determinism than to restore it.
 
 **Verification.** The original is available for reference (the Steam
-re-release), so parity claims can be checked rather than argued:
+re-release), so *feel* claims can be checked rather than argued — but the
+original is a reference, not an oracle. Use it to answer "does a Bomb's blast
+catch a neighbour?" and never to settle "should a Bomb do 3?":
 
 - a headless harness that loads a map + command log and asserts the resulting
-  state hash — this is the regression suite for every rule in [units.md](units.md)
-  that we implement;
+  state hash — the regression suite for every rule we implement, and the thing
+  that makes a tuning change safe;
 - **golden replays** for the awkward rules (cascade, Power Spike taper, EMP
   disable, anti-air reload, Balloon death, Shield pass-through, wrap-around
   range);
-- side-by-side play against the original for anything the manual describes
-  qualitatively — launch ranges, flight arcs, terrain heights, the blast
-  falloff curve — which is how the tuning table in §6 gets filled in.
+- side-by-side play against the original for anything qualitative — launch arcs,
+  terrain heights, how a blast feels. The answers feed §7 and are expected to
+  change again.
 
-**AI.** One planner, written so that personality is data (a weights resource)
-when more opponents arrive.
+**Iteration.** The measure of this prototype is how fast a number can be
+changed, played with and kept or reverted. When a milestone makes that slower,
+the milestone is wrong.
+
+**AI.** One planner, with its weights in data, so that personality is tuning
+rather than code when more opponents arrive.
 
 **Documentation.** `AGENTS.md` is the entry point for this repo and currently
 describes a game that will no longer exist. Update it in the same commit as the
 code it describes, and keep [units.md](units.md) authoritative by citing it from
-the code that implements each rule.
+the code that implements each rule. Where this plan and the original disagree,
+this plan wins — the original is the reference we started from.
 
 ---
 
-## 6. Tuning table (the unknowns)
+## 7. The tuning surface (where every number lives)
 
-These have no published value. Collect them in one place — a resource, not
-scattered `[Export]`s — and record what the original actually does as it is
-measured. **This table is expected to change; nothing else in the plan is.**
+This is the list to keep honest. **Every** gameplay number appears here exactly
+once, with its home resource — that is what §2's "one home per number" means in
+practice. Values marked *(manual)* are the original's published numbers used as
+an opening bid; *(guess)* means nobody published one and this is our first
+estimate. **All of them are expected to change**, repeatedly, and none of them
+requires a code edit to change.
 
-Note what is *not* here: hit points, damage, energy costs, income and the clock
-are all published in the manual and belong in the unit definitions and the
-economy code, not in a tuning table.
+| number | home | starting value |
+| --- | --- | --- |
+| **Per unit:** hit points, damage, level/energy cost, vision radius, launch-force scale, build permission, blast radii | each unit's `UnitDefinition` | HP and damage: *(manual)* — Hub 5, Harvester 5, Anti-Air 3, Shield 3, Crawler 3, Repair 1, Balloon 1; Bomb/Missile 3, EMP 2, Cluster 1.5 × 3, Crawler 4. Costs 1/3/7 *(manual)*. Vision and launch scale: *(guess)* |
+| **Match rules:** turn clock, max stored energy, main-Hub income, Harvester income (on/off pool), rounds-per-game if any, disable duration (EMP, anti-air reload) | `MatchRules` | clock 60 s *(manual)*, cap 35 *(manual)*, Hub 7/round *(manual)*, Harvester 3 / 1 *(manual)*, disable 1 turn cycle *(manual)* |
+| **Blast falloff curve** — the shape between full and no damage | `MatchRules` | two bands: full inside the unit's inner radius, half out to its outer radius *(guess)* |
+| **Launch ballistics:** gravity, arc, launch force range per launcher, slope effect on the first | `MatchRules` | gravity 9.8 (`Projectile.Gravity`) *(guess)*, force 20 (`MaxLaunchForce`) *(guess)* |
+| **Cord rules:** reach per launcher, cord-node spacing, Power Spike taper and node limit | `MatchRules` | spacing and reach *(guess)*; 50-node limit *(manual)* |
+| **World:** map bounds, terrain heights per state, height→range curve, pool sizes, the two start positions | the `MapDefinition` | bounds 475×475 today, pool side 6.0, heights *(guess)* |
+| **Effects:** anti-air range, EMP radius, shield radius, homing turn rate, crawler speed | the relevant `UnitDefinition` (+ `MatchRules` for shared defaults) | relative sizes only *(manual)*: EMP > anti-air, EMP > shield; absolutes *(guess)* |
+| **AI:** every weight the planner uses — aggression, expansion, defence, target preference | `AiProfile` resource | *(guess)* |
+| **Presentation:** nothing gameplay. Keep it out of this table | — | — |
 
-| quantity | original value | ours | notes |
-| --- | --- | --- | --- |
-| Hub launch range (flat ground) | — | 20 (today's `MaxLaunchForce`) | varies with terrain height |
-| Cord segment / node spacing | — | — | also sets the 50-node Power Spike reach |
-| Cord reach from a launcher | — | — | the base build radius; only Hubs grant it |
-| Terrain height per state | — | — | Ground / Plateau / Mountain |
-| Blast falloff curve | a bomb does partial damage to nearby units; the curve is unpublished | full inside 1.5 units, half out to 3 | **our model, not a transcription** |
-| Cluster bomblet damage | "1.5 × 3" in the manual's shorthand | — | three bomblets, each weaker than a Bomb; the split may not survive integer hit points |
-| Pool sizes (small/medium/large) | — | 6.0 (`PoolSide`) | "the larger the pool, the more Harvesters fit" |
-| Projectile gravity / arc | — | 9.8 (`Projectile.Gravity`) | |
-| Anti-Air range | "smaller than an EMP's" | — | |
-| EMP radius | larger than Anti-Air and Shields | — | |
-| Shield radius | — | — | |
-| Vision radius (Hub / Balloon) | — | 12 (placeholder) | |
-| Turn clock default | **60 s** | — | documented |
-| Max stored energy | **35** | — | documented |
-| Hub income | **7**/round | — | documented |
-| Harvester income | **3** on pool, **1** off | — | documented |
-| Bot personality weights | 10 personalities | — | later; data-driven when it lands |
+**The rule for anything new.** A number added by a milestone lands in a resource
+in the same commit that introduces it. A literal that survives a review is a bug
+report waiting to happen, and the fastest way to find one is to try changing
+balance from the dev overlay (M0.7) and see what refuses to move.
 
 ---
 
-## 7. Risks
+## 8. Risks
 
 | risk | why it bites | mitigation |
 | --- | --- | --- |
-| **Scope.** Rules+content+mode parity is still a large project with the roster trimmed. | Morale and half-finished systems. | Milestones are independently shippable. Stop after M1 and you have a better game than today. |
-| **Cut features creeping back.** Wind, water, multiplayer, challenge missions and six units each have a plausible "while we're here". | The plan loses its edge and nothing finishes. | §1 lists every cut with its cost, and the checklist in §8 marks them as deliberate. Re-adding one is a decision to make in the open, not a detail to slip in. |
+| **Treating the reference as the target.** The manual's numbers are the *original's* balance, and this is a different game. | We spend months reproducing someone else's balance instead of finding ours, or we treat "it's in the manual" as a reason a number cannot move. | §1 and §2: everything is provisional; §7 labels each value *(manual)* or *(guess)* and both are changeable. |
+| **Iteration is slow, so it stops.** If a balance change needs a rebuild and a merge, nobody makes it. | The base fails at its main job, and the sequel inherits it. | M0.7, the four rules in §2, and the exit criterion that a damage value changes without touching code. |
+| **Scoping the sequel here.** Designing our own differentiated mechanics before the base works. | The base never lands, and the sequel has no foundation to stand on. | §11 is short on purpose. The base is M0–M9; the sequel is after. |
+| **Cut features creeping back.** Wind, water, multiplayer, challenge missions and six units each have a plausible "while we're here". | The first slice loses its edge and nothing finishes. | §1 lists every cut with its cost, and the checklist in §9 marks them as deliberate. Re-adding one is an open decision, not a detail to slip in. |
 | **M0 refactor churn.** | Everything is edited at once and nothing works. | Keep `GameManager.Instance` and the old ammo path alive behind the new one; land M0 with the game still playable (that is its exit criterion). |
 | **The spec documents more than we build.** [units.md](units.md) describes eighteen units, water and wind. | Someone implements a rule for a unit that does not exist. | §1 is the scope; read it before the spec. |
-| **Wrapping maps touch everything.** | Discovered late, it invalidates distance/targeting/camera code. | It is in M3, before the last of the units and the AI; do the world↔map maths once, centrally. |
-| **Determinism retrofitted.** | Replays break subtly, and a second player would too. | M0.5, before any consumer of it. |
-| **Unknown numbers.** | "Parity" arguments with no referee. | Tuning table, measured against the original, kept in one resource. |
-| **Original assets.** | Copyright. | Behaviour and layout parity only; new art, placeholder audio. |
+| **Wrapping maps touch everything.** | Discovered late, it invalidates distance/targeting/camera code. | M3, before the last of the units and the AI; do the world↔map maths once, centrally. |
+| **Determinism retrofitted.** | Replays and replay-driven tuning both break subtly. | M0.5, before any consumer of it. |
+| **Original assets.** | Copyright. | Behaviour and layout only; new art, placeholder audio — and placeholders chosen so replacing them does not force a re-tune. |
 | **`GameManager` god object.** | Every feature edits one 1355-line file and conflicts. | M0.6. |
 
 ---
 
-## 8. Parity checklist
+## 9. Parity checklist — a starting point, not a ship list
 
-Track progress here. Each line is a claim that can be demonstrated. Lines
-struck through are **deliberately out of scope** (§1) — do not "fix" them.
+Track progress here. Each line is a claim that can be demonstrated. Lines struck
+through are **deliberately out of the first slice** (§1) — do not "fix" them.
+Nothing here is a promise about a finished product: it is the mechanic set the
+base should have, so that there is something solid to iterate on.
 
 **Rules**
 - [ ] Energy 1/3/7, max 35, per-round refill, carry-over
@@ -561,7 +673,7 @@ struck through are **deliberately out of scope** (§1) — do not "fix" them.
 - [ ] Player order shifts left each round
 - [ ] Skip forfeits the round's remaining turns
 - [ ] Hit points per unit type; damage subtracts; partial damage is normal
-- [ ] A weapon damages what it strikes **and** what is near it, on the tuning curve
+- [ ] A weapon damages what it strikes **and** what is near it, on a tunable curve
 - [ ] Cords cannot overlap; illegal launches refused
 - [ ] Nothing but a launcher grants build reach — and only a Hub is a launcher
 - [ ] Cord nodes take no damage except from a Power Spike
@@ -570,21 +682,27 @@ struck through are **deliberately out of scope** (§1) — do not "fix" them.
 - [ ] Terrain height modifies launch range (downhill helps, uphill hurts)
 - [ ] The map wraps in both axes
 - [ ] Win = destroy the opponent's main Hub
-- [ ] ~~Water landings, Bridges, Crawlers under water~~ — cut with water
-- [ ] ~~Wind bends shots~~ — cut
+- [ ] ~~Water landings, Bridges, Crawlers under water~~ — out of the first slice
+- [ ] ~~Wind bends shots~~ — out of the first slice
 
-**Units** — the twelve in [The twelve units](#the-twelve-units), each with its
+**Units** — the twelve in [the starting roster](#the-twelve-units), each with its
 stated exceptions
 - [ ] Level 1: Anti-Air, Bomb, Cluster, Repair
 - [ ] Level 3: Balloon, EMP, Missile, Spike
 - [ ] Level 7: Crawler, Harvester, Hub, Shield
-- [ ] ~~Bridge, Tower, Mines, Reclaimer, Offensive Unit, Virus~~ — cut
+- [ ] ~~Bridge, Tower, Mines, Reclaimer, Offensive Unit, Virus~~ — out of the first slice
+
+**Tuning**
+- [ ] Every number in §7 lives in a resource, once
+- [ ] No gameplay literal left in a `.cs` file
+- [ ] A value can be changed live, in a running match, and written back
+- [ ] A balance change can be judged by replaying a recorded match
 
 **Options**
 - [ ] Clock (default 60 s)
 - [ ] Fog (black unseen area; explosions still visible)
-- [ ] ~~Wind~~ — cut
-- [ ] ~~Teams~~ — cut with >2 players
+- [ ] ~~Wind~~ — out of the first slice
+- [ ] ~~Teams~~ — out of the first slice
 
 **Modes**
 - [ ] 1v1 setup: colour, name, the single BOT slot, map, clock, fog
@@ -592,7 +710,7 @@ stated exceptions
 - [ ] Game summary: Units, Energy, Shots, Hits, Destroyed, Accuracy, Bonus
 - [ ] Map editor: size, terrain, pools, 1v1 start positions, save/load (M9, last)
 - [ ] ~~Challenge mode: 16 missions~~ — deferred
-- [ ] ~~Multiplayer: LAN + internet, lobby, chat~~ — deferred
+- [ ] ~~Networked multiplayer~~ — deferred to the sequel's own design
 
 **Interface**
 - [ ] Energy bar with next-round income indicator
@@ -607,14 +725,37 @@ stated exceptions
 
 ---
 
-## 9. Where to start
+## 10. Where to start
 
 **M0.1–M0.3, then M1.** Concretely, the first commit is `UnitDefinition` plus
-the hit-point model, because until a unit is data and durability is per unit
-type, every unit added is throwaway work. The second is the energy/round loop,
-because that is the difference between a duel and MoonBase Commander.
+the hit-point model, because until a unit is data and its numbers are data,
+every unit added is throwaway work. The second is the energy/round loop, because
+that is the difference between a duel and this genre.
+
+Then M0.7 early, before the roster grows: the tuning surface is cheapest to put
+in place while there are two units' worth of numbers rather than twelve.
 
 The earliest point at which this is a *game* rather than a prototype is the end
 of **M1**: energy, rounds, income, a build menu, and Hubs and Harvesters
-expanding across the development map. That is worth reaching before deciding how
-far down the rest of the list to go.
+expanding across the development map. That is worth reaching — and worth playing
+with the numbers — before deciding how far down the rest of the list to go.
+
+---
+
+## 11. After the milestones: the sequel
+
+Deliberately short. Once the base is playable, tunable and authored-content
+capable, the sequel begins, and none of it is planned here:
+
+- **Its own roster and balance.** The twelve in-scope units are a starting set
+  and their numbers are first guesses; expect the roster to be reshaped and
+  every value to move.
+- **Its own content and modes**, built with the map editor rather than in code:
+  more players, teams, missions, and whatever shape the game turns out to want.
+- **Its own art and audio**, replacing every placeholder.
+- **Its own differentiation** — the mechanics that make it a sequel rather than
+  a clone. Wind, water, network play and the cut six units are all candidates,
+  and all of them are design questions for that game, not implementation
+  questions for this one.
+- **Its own feel claims**, judged by playing it, with the original available as
+  one reference among others.

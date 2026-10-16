@@ -1,15 +1,21 @@
 # MoonBase Commander — the original's unit roster and economy
 
-Reference data for the parity plan in [README.md](README.md). Everything here is
+Reference data for the plan in [README.md](README.md). Everything here is
 transcribed from the **official manual** shipped with *MoonBase Commander*
-(Infogrames / Humongous, 2002), which is the authoritative source for unit
-stats — the in-game numbers are never shown to the player, so the manual is the
-only written record. Source: the manual PDF distributed with the Steam
-re-release, <http://cdn.akamai.steamstatic.com/steam/apps/254880/manuals/MoonBase%20Commander.pdf>
+(Infogrames / Humongous, 2002), which is the authoritative record of **what the
+original does** — the in-game numbers are never shown to the player, so the
+manual is the only written record. Source: the manual PDF distributed with the
+Steam re-release, <http://cdn.akamai.steamstatic.com/steam/apps/254880/manuals/MoonBase%20Commander.pdf>
 (pages 19–26, *Units*, *Destruction*, *Strategies*).
 
+The prototype is the base for a **spiritual sequel**, so these numbers are an
+opening bid and not our balance: they are what the sequel's numbers will be
+iterated *from*. Every value here lands in a resource a designer can change
+([README.md](README.md) §2 and §7), and the original's authority is about
+describing the original, never about settling what our game should do.
+
 Where the manual is ambiguous, this file says so in a **Note** rather than
-guessing. Read those before treating a number as final.
+guessing. Read those before treating a number as accurate.
 
 > **Scope — this file is the original, not the plan.** It documents all
 > eighteen units, water and wind. The project builds a **subset**: see
@@ -169,7 +175,7 @@ you may build, and it is what the destruction cascade propagates along.
   small blast radius and the partial damage it does to nearby units, and the
   project owner confirms it; no radius or curve is published anywhere. Every
   blast number in the code is therefore tuning, not transcription
-  ([README.md](README.md) §6).
+  ([README.md](README.md) §7).
 - Repair's friendly/enemy targeting is **unstated** by the manual: it says "any
   unit it hits" without restricting it, which is read as including enemies.
 - Numbers the manual never gives (launch ranges, cord lengths, pool sizes,
