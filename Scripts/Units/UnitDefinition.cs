@@ -35,8 +35,14 @@ public partial class UnitDefinition : Resource
 	/// <summary>
 	/// Build level, which is also its energy cost: 1, 3 or 7 (docs/parity §7).
 	/// The build menu's pages are the levels.
+	///
+	/// Zero means "not set": a unit has no level until its resource says so, and
+	/// <see cref="UnitCatalog.Validate"/> reports it. The default is deliberately
+	/// not a real level — Godot does not write a value that equals the script's
+	/// default into the resource, so a default that *was* a real cost would be
+	/// the same number living in two places (§2).
 	/// </summary>
-	[Export] public int Level = 1;
+	[Export] public int Level = 0;
 
 	/// <summary>
 	/// Hit points of the structure this unit deploys, subtracted from integer
@@ -77,10 +83,13 @@ public partial class UnitDefinition : Resource
 
 	/// <summary>
 	/// Whether a player may build this unit at all. Units that exist in the
-	/// roster but are not offered (a future scenario-only unit) set this false,
+	/// roster but are not offered (a future scenario-only unit) leave this false,
 	/// and the HUD and the AI's build list both follow it.
+	///
+	/// Off by default, so a unit is offered because its resource says so rather
+	/// than because a code default said so (see <see cref="Level"/>).
 	/// </summary>
-	[Export] public bool CanBeBuilt = true;
+	[Export] public bool CanBeBuilt = false;
 
 	/// <summary>Icon the HUD draws for this unit. Art is ours and replaceable.</summary>
 	[Export] public Texture2D Icon;

@@ -11,5 +11,6 @@ DisplayName = "Hub"
 Traits = 1
 Level = 7
 HitPoints = 5
+CanBeBuilt = true
 Icon = ExtResource("1_wkhjl")
 ProjectileScene = ExtResource("2_84yfh")

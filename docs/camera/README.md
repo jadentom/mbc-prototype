@@ -44,9 +44,10 @@ The resulting position is clamped to `PanBoundsMin`/`PanBoundsMax`.
   re-renders the shared world (`OwnWorld3D=false`) through a straight-down
   orthographic camera (`Current=true` **after** `AddChild`), displayed in a
   `TextureRect` in the bottom-right corner. It is *not* stored in the scene.
-- Shows a fixed `MinimapWorldSize`-square region centered on `MinimapCenter`
-  (default 475×475 ≈ 10x less area than the original 1500×1500; the ground has
-  no real bounds yet).
+- Shows the **map's bounds** — the square region `MapDefinition.Bounds`
+  describes, centered on the map's centre (the development map is 475×475).
+  Before M0.4 this was a `MinimapWorldSize`-square region centered on a
+  `MinimapCenter` of its own, guessed at because the ground had no bounds.
 - The widget scales with the game window: its side is
   `MinimapScreenFraction` (0.25) of the window's shorter side, and
   `UpdateMinimapLayout()` (called from `_Ready` and on `Window.SizeChanged`)
@@ -73,10 +74,11 @@ Features:
 
 ### Scaling seam
 
-Every world↔minimap mapping goes through `GetMinimapWorldRect()`. When a real
-map with bounds exists, replace that method's body (e.g. derive it from
-`PanBoundsMin`/`PanBoundsMax`) and the top-down camera `Size` in
-`CreateMinimap()` — the whole minimap rescales from those two spots.
+Every world↔minimap mapping goes through `GetMinimapWorldRect()`, and both
+that method and the top-down camera `Size` in `CreateMinimap()` now read
+`GameManager.Map` (`MapDefinition.Bounds` and `MapDefinition.Extent`) — this was
+the seam, and docs/parity M0.4 is what went through it. Changing a map's size
+rescales the whole minimap from those two spots; nothing else knows the size.
 
 ## Invariants & gotchas
 

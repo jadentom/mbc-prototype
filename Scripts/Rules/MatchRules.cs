@@ -29,8 +29,25 @@ public partial class MatchRules : Resource
 	/// <see cref="BlastOuterBandFraction"/> of it out to the outer radius, nothing
 	/// past it. Rounding is downward — a near miss is never worth a direct hit —
 	/// so a Bomb (3) splashes 1.
+	///
+	/// Negative means "not set": a rules resource has no curve until its resource
+	/// says so, and <see cref="Validate"/> reports it. The default is deliberately
+	/// not a real share — Godot does not write a value that equals the script's
+	/// default into the resource, so a real one would live in two places (§2).
 	/// </summary>
-	[Export(PropertyHint.Range, "0,1")] public float BlastOuterBandFraction = 0.5f;
+	[Export(PropertyHint.Range, "-1,1")] public float BlastOuterBandFraction = -1f;
+
+	/// <summary>
+	/// Reports a rule set that has not been filled in, so a missing curve is
+	/// visible at match start rather than as a blast that quietly does nothing.
+	/// </summary>
+	public void Validate()
+	{
+		if (BlastOuterBandFraction < 0f)
+		{
+			GD.PushError("MatchRules: no blast falloff curve set (BlastOuterBandFraction is unset) — nothing takes damage from a near miss.");
+		}
+	}
 
 	/// <summary>
 	/// Damage <paramref name="damage"/> deals in the outer band, rounded down

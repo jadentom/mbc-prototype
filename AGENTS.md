@@ -18,9 +18,11 @@ prototype built with **Godot 4.5.1 (C#/.NET)**. Read this before editing.
 - Units are **data**: a `UnitDefinition` per unit in a `UnitCatalog` resource
   (see *Unit data*). There are two today — `hub` and `bomb` — and adding a third
   is a resource plus a behaviour, not a branch in the launcher.
-- Ground is a 10000×10000 plane (effectively infinite play space). The play
-  area that matters today is around the origin; there is **no real map size
-  yet**.
+- The map is **data**: a `MapDefinition` resource (`Resources/Maps/`) holds the
+  play area, the height field, the energy pools and the two start positions
+  (see *Map data*). One map is shipped and the whole of development happens on
+  it. The ground *mesh* is still a 10000×10000 plane — the map's bounds say
+  where the map is, and M3's wrapping world is what gives them teeth.
 - **This prototype is the base for a *MoonBase Commander* (2002) spiritual
   sequel** — a game of our own in the same genre, with the original as the
   reference for how the mechanics should feel and its manual as the starting
@@ -62,7 +64,6 @@ World (Node3D)
 ├── Ground (StaticBody3D, 10000x10000 plane)
 ├── Camera3D            # orthographic (projection=1), size=30, ~45° tilt
 ├── GameManager (Node)  # GameManager.cs — the main controller/singleton
-├── Structure           # the player's starting structure (structure.tscn), Definition = hub
 └── UI (CanvasLayer)
     ├── FireStrengthBar (ProgressBar)      # bottom, full width
     ├── Label                              # control hints
@@ -75,10 +76,10 @@ World (Node3D)
     └── RestartLabel                       # centered, hidden until game over
 ```
 
-Combatants are **not** in the scene: `GameManager.CreateCombatants()` builds
-the player's `PlayerCombatant` (adopting the scene's `Structure` as its root)
-and spawns the enemy's root at runtime — `EnemyStartScreensRight` screen widths
-to the right of the player's. Spawned roots are parented under
+Combatants are **not** in the scene, and neither is a starting structure:
+`GameManager.CreateCombatants()` builds both combatants and each spawns its own
+root at the start position the *map* gives its seat (docs/parity M0.4) — seat 0
+for the human, seat 1 for the AI. Spawned roots are parented under
 `GameManager.StructureContainer` (the tree root and the scene root both reject
 `AddChild` while the scene is still setting up), as is everything else spawned
 during a match — see *Key mechanics & invariants*.
@@ -102,6 +103,8 @@ not stored in the scene. See [docs/camera](docs/camera/README.md).
 | `Scripts/Units/UnitCatalog.cs` | The roster: the one list of units the HUD, the launcher and the AI read. `Find(id)`, `Buildable`, `Validate()`. |
 | `Scripts/Units/UnitTraits.cs` | `UnitTraits { Structure, Weapon }` — what a unit is, for code that does not know it by name. |
 | `Scripts/Rules/MatchRules.cs` | The match's global numbers (docs/parity §7). Today the blast falloff curve; later the clock, energy and ballistics. |
+| `Scripts/World/MapDefinition.cs` | **The map**: bounds, height field and terrain states, energy pools, and the start positions each seat of a match begins at. Builds its own `PoolField`. |
+| `Scripts/World/TerrainState.cs` | `TerrainState { Ground, Plateau, Mountain }` — three states, not the original's four: water is out of the first slice. |
 | `Scripts/Combat/AmmoLauncher.cs` | The single launch path for both sides: takes a `UnitDefinition`, instantiates its scene, hands it an `AmmoLaunch`, registers the `TurnEvent`. |
 | `Scripts/Combat/ILaunchedAmmo.cs` | The behaviour interface every ammo scene's root implements — what replaced the launcher's `if (instance is Projectile) … else if (instance is Bomb)` chain. |
 | `Scripts/Combat/AmmoLaunch.cs` | The struct a shot is configured with: unit, match rules, origin, velocity, turn event. |
@@ -139,12 +142,48 @@ Resources/Rules/match_rules.tres    # the match's global numbers (blast falloff 
   `switch_ammo_next`/`switch_ammo_previous` actions) step through that list.
 - **Adding a unit**: a new `.tres` referencing a new ammo scene, plus an entry in
   `unit_catalog.tres`. Nothing in the launcher, the HUD or the turn code changes.
-- Values in a `.tres` that equal the C# field's default are not written out (that
-  is Godot's serializer, not a missing value); open the resource in the editor to
-  see everything a unit has.
+- Godot does not write a value into a resource when it equals the script's
+  default, so **a default must never be a real number**: `Level` defaults to 0
+  ("no level set") and `CanBeBuilt` to false, and the two shipped units state
+  their real values. A default that were a real cost would be the same number
+  living in two places (§2). The same rule holds for `MatchRules` and
+  `MapDefinition`, whose `Validate()` reports what is still unset.
 - The `hub.tres`/`bomb.tres` split is also where hit points live (§M0.2): a
   structure's hit points are its definition's `HitPoints`, and there is no longer
   one number for every structure.
+
+## Map data (`Resources/Maps/`)
+
+**The map is a resource too.** `MapDefinition` holds the play area, the height
+field, the energy pools and the start positions; `GameManager.Map` is the one
+reference, assigned in `main_scene.tscn`, and `ResolveContent()` validates it at
+match start (a size, two start positions, a height field that matches its grid).
+
+```
+Resources/Maps/development_map.tres   # 475x475, flat, pool side 6 at 1% coverage,
+                                      #   seats at (-50, 0) and (50, 0)
+```
+
+- **Bounds** (`Center`, `Size`) are the play area in world XZ. `Bounds` is what
+  `GetMinimapWorldRect()` returns, so the minimap shows the map and rescales with
+  it; `Extent` is the larger axis, which is the minimap camera's ortho size.
+- **The height field** (`GridWidth`/`GridHeight`, `Terrain`, `TerrainHeights`) is
+  painted but **flat**: the development map's one cell is `Ground`, and the
+  per-state heights (ground 0, plateau 2, mountain 4 — a first guess, §7) are read
+  by nothing until M3. Cells hold *states*, not heights, so what a plateau is
+  worth is one number rather than one per cell. Three states, not four: there is
+  no water (§1).
+- **Pools**: `MapDefinition.CreatePoolField()` scatters them over the map's own
+  bounds, so pools, minimap and start positions agree on where the map is. Zero
+  `PoolSide` or coverage means a map with no pools. `GameManager.CreatePools()`
+  calls it and nothing else knows a pool's size.
+- **Start positions** are seats, in order: seat 0 is the human's, seat 1 the
+  AI's, and `GameManager.CreateCombatants()` spawns each chain's root at its
+  seat's position. Nothing about where a match begins is authored in the scene or
+  derived from the window any more (docs/parity M0.4) — M6's setup screen chooses
+  between maps rather than positions.
+- **Adding a map**: a new `.tres`. One is shipped and all of development happens
+  on it; M9's editor is what authors more.
 
 ## Combatants & turns
 
@@ -212,9 +251,10 @@ Team/targeting details:
   keys); `fire_shot` charges a power bar; release launches the current *unit*.
   The AI drives the same `_currentAimAngle`-equivalent through
   `ShowAimPreview()` and `AmmoLauncher`, so both sides shoot identically.
-- **Enemy tuning** (all exported on `GameManager`): `EnemyStartScreensRight`
-  (default 2), `EnemyThinkTime`, `EnemyAimSpreadDegrees` (180 = fully random),
-  `EnemyMinPower`/`EnemyMaxPower`, `CenterCameraOnActingCombatant`.
+- **Enemy tuning** (all exported on `GameManager`): `EnemyThinkTime`,
+  `EnemyAimSpreadDegrees` (180 = fully random), `EnemyMinPower`/`EnemyMaxPower`,
+  `CenterCameraOnActingCombatant`. Where the two sides *start* is not tuning and
+  is not here: it is the map's `StartPositions`.
 - **Unit data & the blast**: every number a unit has lives on its
   `UnitDefinition` (see *Unit data*), and the only numbers elsewhere are the
   match's `MatchRules`. A weapon damages by distance, not by what it touched:
@@ -233,13 +273,10 @@ Team/targeting details:
   fallback is for running with no content, never the source of truth.
 - **Nothing spawned during a match is parented to the tree root.** Chain roots,
   ammo in flight, explosions and the structures ammo deploys all go under
-  `GameManager.SpawnContainer` (`StructureContainer`), and the player's starting
-  structure is looked up through `GameManager.SceneRoot` — both *inside* the
-  scene. Restarting a finished match reloads the scene, and a reload frees the
-  scene alone: a structure left under the tree root outlives the match, comes
-  back as a stale one nobody can select (its chain is gone), and — being the
-  first `Structure` in the tree — would be adopted as the *next* match's player
-  root, which then spawns the enemy and the camera offset off the wrong place.
+  `GameManager.SpawnContainer` (`StructureContainer`) — both *inside* the scene.
+  Restarting a finished match reloads the scene, and a reload frees the scene
+  alone: a structure left under the tree root outlives the match and comes back
+  as a stale one nobody can select (its chain is gone), standing on the map.
 
 ## Purple pools
 
@@ -254,14 +291,14 @@ a query API, and the collision checks they exist for are not written.
   stored table anywhere in the two pool scripts — the hash *is* the map, and it
   gives the same pools in the same places on every run. It is deliberately not a
   grid: nothing lines up, which is also why it is not a low-discrepancy sequence
-  (Halton's points land on a lattice in each axis taken alone). Exported on
-  `GameManager`: `SpawnPools`, `PoolSide` (three node diameters — a node's radius
-  is 1.0, so 6.0) and `PoolCoverageFraction` (1/100 by default: the count follows
-  from it, giving 63 pools over the 475×475 map).
-- **The field** is `GetMinimapWorldRect()` — the region the minimap already
-  treats as the map — because the ground plane is a 10000×10000 slab with no
-  real bounds (1/100 of *that* would be ~28000 pools). A real map size should
-  move the pools and the minimap onto it together.
+  (Halton's points land on a lattice in each axis taken alone). The numbers are
+  the map's: `MapDefinition.PoolSide` (three structure diameters — a structure's
+  radius is 1.0, so 6.0) and `MapDefinition.PoolCoverageFraction` (1/100 on the
+  development map: the count follows from it, giving 63 pools).
+- **The field** is the map's own `Bounds` (docs/parity M0.4): the map scatters
+  its pools over itself, so the pools, the minimap and the start positions all
+  agree on where the map is. A zero `PoolSide` or coverage means a map with no
+  pools.
 - **No two pools touch.** `Scatter()` rejects any candidate within
   `side × 1.2` of a placed pool — footprints plus both rims — so pools never
   overlap, every one can sit at the same height, and the coverage counted really
@@ -316,7 +353,8 @@ read it before touching anything camera-related. In short:
   inside the window, and no hovered Control.
 - Minimap: a runtime-built square `SubViewport` with a top-down camera,
   rendered into a `TextureRect` (bottom-right); every world↔minimap mapping
-  goes through `GetMinimapWorldRect()` (the scaling seam for a real map).
+  goes through `GetMinimapWorldRect()`, which is the map's bounds — change
+  `MapDefinition.Size` and the minimap rescales with it.
 
 ## Input map (`project.godot`)
 

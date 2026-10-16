@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="MapDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://Scripts/World/MapDefinition.cs" id="1_hajfl"]
+
+[resource]
+script = ExtResource("1_hajfl")
+Id = "development"
+DisplayName = "Development Map"
+Size = Vector2(475, 475)
+GridWidth = 1
+GridHeight = 1
+Terrain = PackedInt32Array(0)
+TerrainHeights = PackedFloat32Array(0, 2, 4)
+PoolSide = 6.0
+PoolCoverageFraction = 0.01
+StartPositions = PackedVector2Array(-50, 0, 50, 0)

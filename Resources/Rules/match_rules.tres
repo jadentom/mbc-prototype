@@ -4,3 +4,4 @@
 
 [resource]
 script = ExtResource("1_ta2or")
+BlastOuterBandFraction = 0.5

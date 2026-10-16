@@ -175,7 +175,7 @@ closes; the **size** column is a rough ordering device, not a promise.
 | **Units** | 18, three levels | 2 of 12 as resources: `hub` and `bomb` in a `UnitCatalog`; `AmmoLauncher` takes a `UnitDefinition` and dispatches through `ILaunchedAmmo` | **L** — ten units to go, and none of them needs a launcher change |
 | **Tunability** | (our own requirement, §2) | the roster, its numbers and the blast curve are resources; the launch forces, the pool scatter and the AI knobs are still C# defaults exported on `GameManager` | **M** — M0.7 finishes it |
 | **Players** | up to 4, teams, shared line of sight | exactly 2, hardcoded in `GameManager.CreateCombatants()` | **M** — generalise the shape, not the count |
-| **Map** | authored, sized, terrain states, wrap-around | flat 10000×10000 plane; play area approximated by `MinimapWorldSize = 475` | **XL** |
+| **Map** | authored, sized, terrain states, wrap-around | one `MapDefinition` resource: bounds, a height field (flat today), the two 1v1 start positions and the pool field. The minimap and the pools read it (M0.4). Still flat, still unwrapped | **L** — M3 makes the world wrap and the heights matter |
 | **Terrain height** | height changes launch range | none — everything sits at y=0 | **M** — three states, not four |
 | **Purple pools** | energy pools; size determines how many Harvesters fit | `PoolField` scatter, decorative, `PoolAt`/`OverlappingPools` written but **never called** | **S** |
 | **Fog / vision** | unseen terrain black; Hub and Balloon vision | none | **L** |
@@ -218,10 +218,13 @@ retrofitting any of them after the content exists costs several times more.
    budget across several launches, then pass" is a different shape, and the
    rotation (a linear scan of `_combatants`) needs an explicit end-of-turn
    concept it does not have.
-5. **There is no map.** The 10000×10000 plane with `MinimapWorldSize = 475`
-   standing in for bounds is already flagged in `AGENTS.md` and in the camera
-   doc's *Scaling seam* section as the thing to replace. Even one hardcoded map
-   needs a resource to hardcode.
+5. ~~**There is no map.**~~ **Landed in M0.4.** The 10000×10000 plane with
+   `MinimapWorldSize = 475` standing in for bounds, flagged in `AGENTS.md` and in
+   the camera doc's *Scaling seam* section, is replaced by
+   `MapDefinition` — bounds, height field, pools and start positions in one
+   resource, with one development map shipped. The plane is still what the
+   ground *is* (M3's wrapping world is what gives the bounds teeth), and the
+   height field is painted but flat.
 6. **No determinism, no serialization.** Replays, save/load, regression testing
    and painless balance iteration all need the same missing thing: a game state
    that is a function of a seed plus an ordered command list.
@@ -282,14 +285,22 @@ is cheap because of it.
   cascade runs down its cords. Reach, overlap, lineage lights and Power Spike
   travel now have an object to be rules *of* — which is what M2 needs, and what
   makes twelve units possible.
-- **M0.4 — Map resource, and the development map.** A `MapDefinition` holding
-  bounds, a height field, the terrain states, energy pools (with size), and the
-  two **start positions** for a 1v1 match. Ship exactly one, hardcoded, as the
-  map every milestone is developed and tuned on. `GetMinimapWorldRect()` and
-  `CreateMinimap()`'s camera size come off it — exactly the *Scaling seam* the
-  camera doc already specifies. Move `PoolField`'s scatter to generate into the
-  map rather than onto the plane, and take the start positions from it instead
-  of from the camera and window aspect.
+- **M0.4 — Map resource, and the development map.** **Landed.** `MapDefinition`
+  holds bounds, a height field and the three terrain states, the energy pools
+  (with size), and the two **start positions** for a 1v1 match. Exactly one is
+  shipped — `Resources/Maps/development_map.tres`, the map every milestone is
+  developed and tuned on. `GetMinimapWorldRect()` and `CreateMinimap()`'s camera
+  size come off it, through exactly the *Scaling seam* the camera doc specifies;
+  `MapDefinition.CreatePoolField()` scatters the pools over the map's own bounds
+  rather than over the region the minimap happened to show; and both chains now
+  spawn at the map's start positions — the player's is no longer a node in the
+  scene, the enemy's is no longer two screen widths to its right
+  (`EnemyStartScreensRight` is gone, and with it the window-aspect dependency).
+
+  The height field is *painted but flat*: every cell is ground, and the per-state
+  heights (ground 0, plateau 2, mountain 4 — our first guess) are read by nothing
+  until M3 turns them into terrain, the height→range curve and the flat-ground
+  landing rule. Water is not a state at all (§1).
 - **M0.5 — Command log & determinism.** Every player and AI action becomes a
   serializable command appended to an ordered log; simulation advances only by
   applying commands. Fixed timestep for physics-affecting steps. This is what

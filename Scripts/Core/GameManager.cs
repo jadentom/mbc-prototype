@@ -31,8 +31,6 @@ public partial class GameManager : Node
 	[Export] public float CameraSmoothTime = 0.5f;
 
 	[ExportGroup("Enemy")]
-	/// <summary>How far right of the player's starting node the enemy chain spawns, in screen widths (1 screen = the camera's visible width).</summary>
-	[Export] public float EnemyStartScreensRight = 2.0f;
 	/// <summary>Seconds the enemy spends aiming before it releases its shot.</summary>
 	[Export] public float EnemyThinkTime = 1.0f;
 	/// <summary>Half-angle of the enemy's random aim cone, in degrees (180 = any direction).</summary>
@@ -41,7 +39,7 @@ public partial class GameManager : Node
 	[Export(PropertyHint.Range, "0,1")] public float EnemyMinPower = 0.3f;
 	/// <summary>Highest launch power the enemy will pick, 0..1 of the force range.</summary>
 	[Export(PropertyHint.Range, "0,1")] public float EnemyMaxPower = 0.9f;
-	/// <summary>Center the camera on whichever combatant is acting, so the enemy's move (it starts two screens away) is visible.</summary>
+	/// <summary>Center the camera on whichever combatant is acting, so a move somewhere else on the map is visible.</summary>
 	[Export] public bool CenterCameraOnActingCombatant = true;
 
 	[ExportGroup("Camera Panning")]
@@ -51,10 +49,6 @@ public partial class GameManager : Node
 	[Export] public Vector2 PanBoundsMax = new Vector2(5000, 5000);
 
 	[ExportGroup("Minimap")]
-	[Export] public Vector2 MinimapCenter = new Vector2(0, 0);
-	// World side length shown. 1500^2 -> 475^2 cuts the covered area ~10x
-	// (2250000 vs 225625) while keeping the on-screen widget small.
-	[Export] public float MinimapWorldSize = 475.0f;
 	// On-screen minimap side as a fraction of the window's shorter side
 	// (e.g. 0.25 -> 162px at 648px window height, 270px at 1080p).
 	[Export(PropertyHint.Range, "0.05, 0.5")]
@@ -112,25 +106,16 @@ public partial class GameManager : Node
 	/// </summary>
 	[Export] public MatchRules Rules;
 
-	[ExportGroup("Pools")]
-	/// <summary>Scatter the fixed map of purple pools over the ground at match start.</summary>
-	[Export] public bool SpawnPools = true;
 	/// <summary>
-	/// Side of one pool, in world units: three node diameters. A node's radius is
-	/// 1.0 (see Scenes/structure.tscn), so a diameter is 2.0 and a side is 6.0.
+	/// The map this match is fought on: its bounds, its pools and its start
+	/// positions (docs/parity §M0.4). Assigned in main_scene.tscn.
 	/// </summary>
-	[Export] public float PoolSide = 6.0f;
-	/// <summary>
-	/// Share of the map's ground the pools cover: 1/100 by default. The number of
-	/// pools follows from it (how many of them fit in that much ground), so the
-	/// map stays as sparse or as busy as this says.
-	/// </summary>
-	[Export(PropertyHint.Range, "0,0.5")] public float PoolCoverageFraction = 0.01f;
+	[Export] public MapDefinition Map;
 
 	public Structure SelectedStructure;
 
 	/// <summary>
-	/// The map's purple pools, or null when <see cref="SpawnPools"/> is off.
+	/// The map's purple pools, or null when the map asks for none.
 	///
 	/// Nothing reads a pool yet: the pools are decoration. This is the hook the
 	/// future collision checks use — <c>Pools.PoolAt(position)</c> for a point and
@@ -165,6 +150,10 @@ public partial class GameManager : Node
 	/// spawn its root while the GameManager is still being readied, and neither
 	/// the tree root nor the scene root accepts children at that point ("parent
 	/// node is busy setting up children"); a node's own children never are.
+	///
+	/// Every structure in a match is spawned by its combatant at a start position
+	/// the map gives (docs/parity M0.4) — nothing in the scene tree is adopted as
+	/// a chain root any more.
 	/// </summary>
 	public Node3D StructureContainer { get; private set; }
 
@@ -177,8 +166,7 @@ public partial class GameManager : Node
 	/// finished match reloads the scene, and a reload frees the scene alone. A
 	/// node parented to the tree root outlives the match and leaks into the next
 	/// one — visible, unselectable, owned by a chain that no longer exists, and
-	/// the first "Structure" in the tree, so the new match would adopt it as the
-	/// player's starting structure (see <see cref="SceneRoot"/>).
+	/// standing on the map doing nothing.
 	///
 	/// Falls back to the tree root only before the match has been set up.
 	/// </summary>
@@ -190,14 +178,6 @@ public partial class GameManager : Node
 			return GetTree()?.Root;
 		}
 	}
-
-	/// <summary>
-	/// The subtree this match lives in — the scene root a restart replaces
-	/// (GameManager is a direct child of it). The player's starting structure is
-	/// looked up from here rather than from the tree root, so a structure that
-	/// lives outside the scene can never be mistaken for part of the match.
-	/// </summary>
-	private Node SceneRoot => GetParent() ?? GetTree().Root;
 
 	/// <summary>Current round number. Starts at 1 and advances when the rotation wraps around.</summary>
 	public int CurrentTurn { get; private set; } = 1;
@@ -271,14 +251,13 @@ public partial class GameManager : Node
 	{
 		Instance = this;
 		
-		// 1. Setup Camera Offset
+		// 1. Camera offset: where the camera sits relative to what it is looking
+		// at. Taken as the authored camera position measured from the seat the
+		// match opens on, so the opening view is the one the scene was framed
+		// with whatever the map says about where that seat is.
 		if (MainCamera != null)
 		{
-			var startBase = SceneRoot.FindChild("Structure", true, false) as Node3D;
-			if (startBase != null)
-				_cameraOffset = MainCamera.GlobalPosition - startBase.GlobalPosition;
-			else
-				_cameraOffset = new Vector3(0, 15, 15); // Standard top-down angle
+			_cameraOffset = MainCamera.GlobalPosition - PlayerStartPosition;
 		}
 
 		CreateAimIndicator();
@@ -354,21 +333,12 @@ public partial class GameManager : Node
 		AddChild(_playerCombatant);
 		_combatants.Add(_playerCombatant);
 
-		// Looked up inside this scene (never the tree root) so a node left
-		// outside it — anything that outlived an earlier match — cannot be
-		// adopted as the player's root.
-		var startBase = SceneRoot.FindChild("Structure", true, false) as Structure;
-		if (startBase != null)
-		{
-			// Adopted before the node's _Ready runs (GameManager is ready first, so
-			// its _Ready can register the node with this chain).
-			_playerCombatant.AttachRoot(startBase);
-		}
-		else
-		{
-			GD.PushWarning("No starting Structure found in the scene — spawning the player's root at the origin.");
-			_playerCombatant.SpawnRoot(Vector3.Zero);
-		}
+		// Both chains start where the *map* says, seat 0 for the human and seat 1
+		// for the AI (docs/parity M0.4). Nothing is authored in the scene any
+		// more: a start position is map data, so a second map is a second file
+		// rather than a moved node, and the distance between the two sides stops
+		// depending on the window's aspect ratio.
+		Structure playerRoot = _playerCombatant.SpawnRoot(SeatPosition(0));
 
 		// --- Enemy (team 1) ---
 		_enemyCombatant = new EnemyCombatant
@@ -385,48 +355,43 @@ public partial class GameManager : Node
 		};
 		AddChild(_enemyCombatant);
 		_combatants.Add(_enemyCombatant);
-		Structure enemyRoot = _enemyCombatant.SpawnRoot(GetEnemyStartPosition());
+		Structure enemyRoot = _enemyCombatant.SpawnRoot(SeatPosition(1));
 
-		GD.Print($"[Match] {_combatants.Count} combatants ready. Enemy root at {enemyRoot?.GlobalPosition} "
-			+ $"({EnemyStartScreensRight} screens right of the player's root).");
+		GD.Print($"[Match] {_combatants.Count} combatants ready: seat 0 at {playerRoot?.GlobalPosition}, "
+			+ $"seat 1 at {enemyRoot?.GlobalPosition}.");
 	}
 
 	/// <summary>
-	/// The enemy's starting spot: <see cref="EnemyStartScreensRight"/> screen
-	/// widths to the right of the player's root, on the same Z.
+	/// Where a seat of this match begins. The map owns these (docs/parity M0.4);
+	/// without one both seats fall back to the origin, which is visibly broken
+	/// and says so through <see cref="ResolveContent"/> rather than silently
+	/// inventing a layout.
 	/// </summary>
-	private Vector3 GetEnemyStartPosition()
+	private Vector3 SeatPosition(int seat)
 	{
-		Vector3 origin = Vector3.Zero;
-		if (_playerCombatant?.RootStructure != null && IsInstanceValid(_playerCombatant.RootStructure))
-		{
-			origin = _playerCombatant.RootStructure.GlobalPosition;
-		}
-
-		float screenWidth = (MainCamera != null ? MainCamera.Size : 30f) * GetViewportAspect();
-		return new Vector3(origin.X + screenWidth * EnemyStartScreensRight, 0f, origin.Z);
+		return Map != null ? Map.StartPosition(seat) : Vector3.Zero;
 	}
+
+	/// <summary>Where the human's chain begins: the seat the opening view is framed on.</summary>
+	private Vector3 PlayerStartPosition => SeatPosition(0);
 
 	// ------------------------------------------------------------------
 	// Pools
 	// ------------------------------------------------------------------
 
 	/// <summary>
-	/// Scatters the map's purple pools over the ground. Nothing in the game reacts
-	/// to them yet — they are a decorative field with a query API for the collision
+	/// Lays the map's purple pools over its ground. Nothing in the game reacts to
+	/// them yet — they are a decorative field with a query API for the collision
 	/// checks that will come later (see <see cref="Pools"/>).
 	///
-	/// Scattered over <see cref="GetMinimapWorldRect"/>: the region the minimap
-	/// already treats as the map. The ground itself is a 10000x10000 plane with no
-	/// real bounds (see docs/camera/README.md), and 1/100 of *that* would be some
-	/// 28000 pools, so "the ground" here is the map rather than the engine's plane.
-	/// When a real map size lands, this and the minimap move to it together.
+	/// The map scatters them over its own bounds (docs/parity M0.4); before that
+	/// they were scattered over whatever region the minimap happened to show, on
+	/// a ground plane with no bounds at all.
 	/// </summary>
 	private void CreatePools()
 	{
-		if (!SpawnPools) return;
-
-		Pools = PoolField.Spawn(this, GetMinimapWorldRect(), PoolSide, PoolCoverageFraction);
+		Pools = Map?.CreatePoolField(this);
+		if (Pools == null) return;
 
 		// Pools are drawn on a layer of their own so the minimap camera can skip
 		// them and draw flat, steady-coloured markers instead (see CreateMinimap).
@@ -467,6 +432,18 @@ public partial class GameManager : Node
 		{
 			GD.PushWarning("GameManager: no MatchRules assigned — using the code's fallback rules.");
 			Rules = new MatchRules();
+		}
+		Rules.Validate();
+
+		if (Map == null)
+		{
+			GD.PushError($"GameManager: no MapDefinition assigned — the match has no bounds and both sides start at the origin. "
+				+ $"The minimap falls back to a {FallbackWorldExtent}-unit square.");
+		}
+		else
+		{
+			Map.Validate();
+			GD.Print($"[Match] Map: {Map.Describe()}.");
 		}
 
 		BuildUnitIcons();
@@ -1074,7 +1051,6 @@ public partial class GameManager : Node
 		var uiLayer = GetNodeOrNull<CanvasLayer>("../UI");
 		if (uiLayer == null) return;
 
-		MinimapWorldSize = Mathf.Max(MinimapWorldSize, 1f);
 
 		// 1. Off-screen SubViewport that re-renders the shared 3D world top-down.
 		// Its resolution is matched to the on-screen widget by UpdateMinimapLayout().
@@ -1093,8 +1069,8 @@ public partial class GameManager : Node
 		{
 			Name = "MinimapCamera",
 			Projection = Camera3D.ProjectionType.Orthogonal,
-			Size = MinimapWorldSize,
-			Position = new Vector3(MinimapCenter.X, 2000, MinimapCenter.Y),
+			Size = MinimapExtent,
+			Position = new Vector3(GetMinimapWorldRect().GetCenter().X, 2000, GetMinimapWorldRect().GetCenter().Y),
 			RotationDegrees = new Vector3(-90, 0, 0),
 			Near = 1.0f,
 			Far = 4000.0f,
@@ -1220,9 +1196,21 @@ public partial class GameManager : Node
 	/// </summary>
 	private Rect2 GetMinimapWorldRect()
 	{
-		float half = MinimapWorldSize * 0.5f;
-		return new Rect2(MinimapCenter.X - half, MinimapCenter.Y - half, MinimapWorldSize, MinimapWorldSize);
+		return Map != null
+			? Map.Bounds
+			: new Rect2(Vector2.Zero - (Vector2.One * (FallbackWorldExtent * 0.5f)), Vector2.One * FallbackWorldExtent);
 	}
+
+	/// <summary>Side of the square region the minimap shows: the map's extent.</summary>
+	private float MinimapExtent => Map != null ? Mathf.Max(Map.Extent, 1f) : FallbackWorldExtent;
+
+	/// <summary>
+	/// The region the minimap shows when the match has no map resource at all.
+	/// A fallback for running with no content (§2), never a map: the match will
+	/// have said so through <see cref="ResolveContent"/>, and this only keeps the
+	/// minimap and the pools from dividing by zero.
+	/// </summary>
+	private const float FallbackWorldExtent = 100f;
 
 	/// <summary>Converts a world-space XZ position to minimap pixel coordinates.</summary>
 	private Vector2 WorldToMinimap(Vector2 worldXZ)

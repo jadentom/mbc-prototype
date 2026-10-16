@@ -51,25 +51,6 @@ public abstract partial class NodeChainCombatant : Combatant
 	public override bool IsDefeated => FindRootStructure() == null;
 
 	/// <summary>
-	/// Adopts a structure already standing in the scene (the player's starting
-	/// one) as this combatant's root.
-	/// </summary>
-	public void AttachRoot(Structure root)
-	{
-		if (root == null) return;
-
-		// A root authored in a scene carries its own definition; the match's
-		// starting unit is the fallback for one that does not (§2). Both are set
-		// before the structure's _Ready reads them for its hit points.
-		if (root.Definition == null) root.Definition = RootUnit;
-
-		RootStructure = root;
-		root.OwnerChain = this;
-		// Structure._Ready registers itself too; RegisterStructure is idempotent.
-		RegisterStructure(root);
-	}
-
-	/// <summary>
 	/// Spawns this combatant's starting root structure at <paramref name="position"/>
 	/// and returns it. Ownership and the unit definition are set before the
 	/// structure enters the tree so its _Ready registers it with this chain and

@@ -12,9 +12,11 @@ Destroy the enemy's root to win: a root's destruction cascades down its cords
 through everything it anchors, so the match ends the moment one side runs out of
 structures. Any key or click on the victory/defeat screen restarts.
 
-There are two units today, and they are **data**: a `UnitDefinition` resource per
-unit in a `UnitCatalog`, so their numbers are edited in the editor rather than in
-code. The Bomb is the weapon — it does 3 damage to a 5-hit-point Hub, so two
+The map is **data** too: `Resources/Maps/development_map.tres` holds the play
+area the minimap shows, where the two sides start, and how big the energy pools
+are and how much of the ground they cover. There are two units, likewise data — a
+`UnitDefinition` resource per unit in a `UnitCatalog`, so their numbers are
+edited in the editor rather than in code. The Bomb is the weapon — it does 3 damage to a 5-hit-point Hub, so two
 direct hits destroy one, and everything within 1.5 world units of where it lands
 takes those 3 while the ring out to 3 units takes half (rounded down, so 1). The
 blast draws expanding spheres and leaves a marker on the ground showing where

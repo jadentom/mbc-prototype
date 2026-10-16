@@ -103,7 +103,7 @@ public partial class UnitCatalog : Resource
 
 			if (unit.ProjectileScene == null) GD.PushError($"UnitCatalog: '{unit.Id}' has no projectile scene, so it cannot be launched.");
 			if (unit.HitPoints < 0) GD.PushError($"UnitCatalog: '{unit.Id}' has negative hit points.");
-			if (unit.Level < 0) GD.PushError($"UnitCatalog: '{unit.Id}' has a negative level.");
+			if (unit.Level <= 0) GD.PushError($"UnitCatalog: '{unit.Id}' has no level (its energy cost) — set one in the unit's resource.");
 			if (unit.HasBlast && unit.Damage <= 0) GD.PushWarning($"UnitCatalog: '{unit.Id}' has blast radii but no damage.");
 			if (unit.Damage > 0 && !unit.HasBlast) GD.PushWarning($"UnitCatalog: '{unit.Id}' damages only what it strikes (no blast radii).");
 		}
