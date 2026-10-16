@@ -3,7 +3,9 @@ using System;
 using System.Collections.Generic;
 using MbcPrototype.Combat;
 using MbcPrototype.Enemies;
+using MbcPrototype.Rules;
 using MbcPrototype.TurnSystem;
+using MbcPrototype.Units;
 using MbcPrototype.World;
 
 namespace MbcPrototype.Core;
@@ -83,17 +85,32 @@ public partial class GameManager : Node
 	[Export] public float MinimapPoolMarkerSize = 3.0f;
 
 	[ExportGroup("UI References")]
-	[Export] public TextureRect NodeIcon;
-	[Export] public TextureRect BombIcon;
+	/// <summary>
+	/// The strip the HUD's unit icons are built into. The icons come from the
+	/// catalog at match start (see <see cref="BuildUnitIcons"/>) rather than from
+	/// the scene, so the units on screen and the units that can be launched are
+	/// the same list.
+	/// </summary>
+	[Export] public Control UnitIconBar;
 	[Export] public ColorRect SelectorBox;
 	[Export] public Label TurnLabel;
 	[Export] public Label DefeatLabel;
 	[Export] public Label VictoryLabel;
 	[Export] public Label RestartLabel;
 
-	[ExportGroup("Ammo Prefabs")]
-	[Export] public PackedScene ProjectileScene; // TODO: Change this to an interface; this is specifically a deploying node projectile
-	[Export] public PackedScene BombScene;
+	[ExportGroup("Content")]
+	/// <summary>
+	/// The roster this match draws from, and the units the HUD offers
+	/// (docs/parity §2: unit data lives in resources, and there is one list of
+	/// it). Assigned in main_scene.tscn.
+	/// </summary>
+	[Export] public UnitCatalog Catalog;
+
+	/// <summary>
+	/// The match's global rules — the numbers that are not per-unit and not part
+	/// of the map (docs/parity §7). Assigned in main_scene.tscn.
+	/// </summary>
+	[Export] public MatchRules Rules;
 
 	[ExportGroup("Pools")]
 	/// <summary>Scatter the fixed map of purple pools over the ground at match start.</summary>
@@ -121,6 +138,18 @@ public partial class GameManager : Node
 	/// size.
 	/// </summary>
 	public PoolField Pools { get; private set; }
+
+	/// <summary>
+	/// The buildable units in catalog order, and the HUD icon built for each one.
+	/// The two lists are kept in step by <see cref="BuildUnitIcons"/>: the icon
+	/// the selector sits under is always the unit that would be fired, because
+	/// there is only one list of units.
+	/// </summary>
+	private readonly List<UnitDefinition> _buildableUnits = new List<UnitDefinition>();
+	private readonly List<TextureRect> _unitIcons = new List<TextureRect>();
+
+	/// <summary>Which entry of <see cref="_buildableUnits"/> the player has selected.</summary>
+	private int _currentUnitIndex;
 
 	/// <summary>The combatant whose turn it currently is (null before the match starts).</summary>
 	public Combatant ActiveCombatant { get; private set; }
@@ -182,13 +211,17 @@ public partial class GameManager : Node
 	/// </summary>
 	public bool IsResolvingTurn { get; private set; } = false;
 
+	/// <summary>The unit the player would fire right now (null when the roster is empty).</summary>
+	public UnitDefinition CurrentUnit => _currentUnitIndex >= 0 && _currentUnitIndex < _buildableUnits.Count
+		? _buildableUnits[_currentUnitIndex]
+		: null;
+
 	private Vector3 _cameraOffset;
 	private float _currentAimAngle = 0f;
 	private MeshInstance3D _aimIndicator;
 	private float _currentPowerPercent = 0f;
 	private bool _isCharging = false;
 	private bool _isChargingUp = true;
-	private AmmoType _currentAmmo = AmmoType.Node;
 
 	// In-flight camera centering tween, killed the moment the player pans.
 	private Tween _cameraTween;
@@ -250,7 +283,11 @@ public partial class GameManager : Node
 
 		CreateAimIndicator();
 		CreateMinimap();
-		UpdateSelectedAmmo();
+
+		// The match's content (the roster and the rules) before anything reads a
+		// unit or a number off it: the HUD's unit strip, the starting structures
+		// and every launch all come from here.
+		ResolveContent();
 		if (PowerBar != null) PowerBar.Visible = false;
 		if (DefeatLabel != null) DefeatLabel.Visible = false;
 		if (VictoryLabel != null) VictoryLabel.Visible = false;
@@ -295,6 +332,16 @@ public partial class GameManager : Node
 	/// </summary>
 	private void CreateCombatants()
 	{
+		// The structure every chain starts from, taken from the roster rather
+		// than named in code. It is the Hub today; docs/parity M0.4 moves the
+		// starting *units* onto the map's start positions, and M6 lets the setup
+		// screen choose them.
+		UnitDefinition startingUnit = Catalog?.Find("hub");
+		if (startingUnit == null)
+		{
+			GD.PushWarning("GameManager: the catalog has no 'hub' unit — the starting chains will spawn without a definition.");
+		}
+
 		// --- Player (team 0) ---
 		_playerCombatant = new PlayerCombatant
 		{
@@ -302,6 +349,7 @@ public partial class GameManager : Node
 			DisplayName = "You",
 			Team = 0,
 			MinimapColor = MinimapNodeColor,
+			RootUnit = startingUnit,
 		};
 		AddChild(_playerCombatant);
 		_combatants.Add(_playerCombatant);
@@ -329,6 +377,7 @@ public partial class GameManager : Node
 			DisplayName = "Enemy",
 			Team = 1,
 			MinimapColor = MinimapEnemyNodeColor,
+			RootUnit = startingUnit,
 			ThinkTime = EnemyThinkTime,
 			AimSpreadDegrees = EnemyAimSpreadDegrees,
 			MinPowerPercent = EnemyMinPower,
@@ -388,12 +437,110 @@ public partial class GameManager : Node
 		}
 	}
 
-	private void UpdateSelectedAmmo()
+	// ------------------------------------------------------------------
+	// Content: the roster and the rules
+	// ------------------------------------------------------------------
+
+	/// <summary>
+	/// Loads the match's content and builds the HUD from it: the unit catalog
+	/// (docs/parity §M0.1) and the match rules (§M0.2, §7).
+	///
+	/// Both are resources authored outside the code. The fallbacks here exist so
+	/// the project still runs with no assets at all — the rules fall back to
+	/// their code defaults, and a missing catalog is reported loudly rather than
+	/// papered over with a hardcoded roster, because a roster in code is exactly
+	/// what this milestone removes (§2).
+	/// </summary>
+	private void ResolveContent()
+	{
+		if (Catalog == null)
+		{
+			GD.PushError("GameManager: no UnitCatalog assigned — there is no roster to build or launch from this match.");
+		}
+		else
+		{
+			Catalog.Validate();
+			GD.Print($"[Match] Unit catalog: {Catalog.Count} unit(s) — {Catalog.DescribeIds()}.");
+		}
+
+		if (Rules == null)
+		{
+			GD.PushWarning("GameManager: no MatchRules assigned — using the code's fallback rules.");
+			Rules = new MatchRules();
+		}
+
+		BuildUnitIcons();
+		_currentUnitIndex = 0;
+		UpdateUnitSelector();
+	}
+
+	/// <summary>
+	/// Builds the HUD's unit strip from the catalog: one icon per buildable unit,
+	/// in roster order, under <see cref="UnitIconBar"/>. The strip is built rather
+	/// than authored so that adding a unit to the roster adds its icon, and a
+	/// second hand-maintained list of "what exists" cannot drift from the first.
+	/// </summary>
+	private void BuildUnitIcons()
+	{
+		_buildableUnits.Clear();
+		_unitIcons.Clear();
+
+		if (UnitIconBar == null || Catalog == null) return;
+
+		// Idempotent: whatever is in the bar goes first — the catalog is the only
+		// thing this bar is allowed to show.
+		foreach (Node child in UnitIconBar.GetChildren())
+		{
+			UnitIconBar.RemoveChild(child);
+			child.QueueFree();
+		}
+
+		foreach (UnitDefinition unit in Catalog.Buildable)
+		{
+			var icon = new TextureRect
+			{
+				Name = string.IsNullOrEmpty(unit.Id) ? "UnitIcon" : $"UnitIcon_{unit.Id}",
+				Texture = unit.Icon,
+				StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
+				SizeFlagsHorizontal = Control.SizeFlags.ShrinkBegin,
+				// The bar is a readout, not a control: clicks belong to the world.
+				MouseFilter = Control.MouseFilterEnum.Ignore,
+			};
+			UnitIconBar.AddChild(icon);
+			_buildableUnits.Add(unit);
+			_unitIcons.Add(icon);
+		}
+
+		GD.Print($"[Match] Unit strip: {_buildableUnits.Count} icon(s).");
+	}
+
+	/// <summary>
+	/// Moves the player's selection through the buildable units by
+	/// <paramref name="step"/>, wrapping at both ends.
+	/// </summary>
+	private void CycleUnit(int step)
+	{
+		if (_buildableUnits.Count == 0) return;
+
+		_currentUnitIndex = ((_currentUnitIndex + step) % _buildableUnits.Count + _buildableUnits.Count) % _buildableUnits.Count;
+		GD.Print($"Switched to: {CurrentUnit?.DisplayName}");
+		UpdateUnitSelector();
+	}
+
+	/// <summary>
+	/// Slides the HUD's selector box under the icon of the unit that would be
+	/// fired. Nothing to show means nothing to move: an empty roster leaves the
+	/// box where it is rather than tweening it to nowhere.
+	/// </summary>
+	private void UpdateUnitSelector()
 	{
 		if (SelectorBox == null) return;
 
 		// Determine which icon to highlight
-		TextureRect targetIcon = (_currentAmmo == AmmoType.Node) ? NodeIcon : BombIcon;
+		TextureRect targetIcon = _currentUnitIndex >= 0 && _currentUnitIndex < _unitIcons.Count
+			? _unitIcons[_currentUnitIndex]
+			: null;
+		if (targetIcon == null) return;
 
 		// Smoothly move the selector box to the icon's position
 		Tween tween = GetTree().CreateTween();
@@ -484,13 +631,9 @@ public partial class GameManager : Node
 		float input = Input.GetAxis("aim_left", "aim_right");
 		_currentAimAngle += input * RotationSpeed * delta;
 
-		// Switch Ammo Type with Q or E
-		if (Input.IsActionJustPressed("switch_ammo_next") || Input.IsActionJustPressed("switch_ammo_previous"))
-		{
-			_currentAmmo = _currentAmmo == AmmoType.Node ? AmmoType.Bomb : AmmoType.Node;
-			GD.Print("Switched to: " + _currentAmmo);
-			UpdateSelectedAmmo();
-		}
+		// Switch the unit to launch with Q or E.
+		if (Input.IsActionJustPressed("switch_ammo_next")) CycleUnit(1);
+		if (Input.IsActionJustPressed("switch_ammo_previous")) CycleUnit(-1);
 
 		ShowAimPreview(SelectedNode, _currentAimAngle, _currentPowerPercent);
 	}
@@ -575,13 +718,13 @@ public partial class GameManager : Node
 	}
 
 	/// <summary>
-	/// Fires the currently selected ammo along the player's current aim. Uses
+	/// Fires the currently selected unit along the player's current aim. Uses
 	/// the exact same launch path as every AI combatant.
 	/// </summary>
 	/// <param name="powerPercent">Charge level, 0..1, mapped onto the launch force range.</param>
 	private void Fire(float powerPercent)
 	{
-		AmmoLauncher.Launch(_currentAmmo, SelectedNode, _currentAimAngle, powerPercent, null);
+		AmmoLauncher.Launch(CurrentUnit, SelectedNode, _currentAimAngle, powerPercent, null);
 	}
 
 	// ------------------------------------------------------------------

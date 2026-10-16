@@ -1,54 +1,48 @@
 using Godot;
 using System.Collections.Generic;
 using MbcPrototype.Core;
+using MbcPrototype.Rules;
 using MbcPrototype.TurnSystem;
+using MbcPrototype.Units;
 
 namespace MbcPrototype.Combat;
 
-public partial class Bomb : CharacterBody3D
+/// <summary>
+/// The ammo of a weapon: it flies ballistically, and where it goes off it
+/// damages everything near the impact by distance.
+///
+/// Every number it needs — damage, both blast radii, and the falloff curve
+/// between them — is data (docs/parity §2, §7). Nothing here is tuned in code,
+/// so a balance change is an edit to a <see cref="UnitDefinition"/> or to the
+/// match's <see cref="MatchRules"/> and not a rebuild.
+/// </summary>
+public partial class Bomb : CharacterBody3D, ILaunchedAmmo
 {
 	public float Gravity = 9.8f;
 	[Export] public GpuParticles3D ExplosionParticles;
 
 	/// <summary>
-	/// Radius of the full-damage ("direct hit") zone, in world units, measured
-	/// along the ground from where the bomb went off.
-	///
-	/// Before it had a blast at all, a bomb only ever damaged the node it
-	/// physically touched, so the area it could hurt was about one node wide
-	/// (nodes were 1-unit-wide cylinders then, 2 units across since their radius
-	/// was doubled — see Scenes/base_node.tscn). It started at twice that and was
-	/// tuned down to 1.5 after watching the ground marker in play; <see cref="OuterRadius"/>
-	/// stayed at 3, so the half-damage donut is what got wider. These two radii are
-	/// also what <see cref="BlastVisual"/> draws and what its ground marker shows,
-	/// so they can be compared against the health bars after a shot.
-	/// </summary>
-	[ExportGroup("Blast")]
-	[Export] public float DirectHitRadius = 1.5f;
-
-	/// <summary>
-	/// Radius of the half-damage donut's outer edge, in world units. Nodes
-	/// further out than this take nothing from the blast.
-	/// </summary>
-	[Export] public float OuterRadius = 3.0f;
-
-	/// <summary>
-	/// Damage dealt inside <see cref="DirectHitRadius"/>: the bomb's old
-	/// one-point hit, doubled along with node health (see BaseNode.MaxHealth), so
-	/// a node still takes exactly three direct bombs.
-	/// </summary>
-	[Export] public int DirectHitDamage = 2;
-
-	/// <summary>Damage dealt in the donut between the two radii — half of a direct hit.</summary>
-	[Export] public int HalfDamage = 1;
-
-	/// <summary>
 	/// Resolved when this bomb finishes exploding. Part of the
 	/// turn-resolution system: the turn cannot end until this event resolves.
 	/// </summary>
-	public TurnEvent TurnEvent;
+	public TurnEvent TurnEvent { get; private set; }
+
+	/// <summary>The roster entry this shot was fired as: its damage and blast radii.</summary>
+	public UnitDefinition Unit { get; private set; }
+
+	/// <summary>The match's global rules: the blast falloff curve.</summary>
+	public MatchRules Rules { get; private set; }
 
 	private bool _exploded = false;
+
+	/// <summary>Called once by <see cref="AmmoLauncher"/> before this node enters the tree.</summary>
+	public void Initialize(AmmoLaunch launch)
+	{
+		Velocity = launch.Velocity;
+		Unit = launch.Unit;
+		Rules = launch.Rules;
+		TurnEvent = launch.TurnEvent;
+	}
 
 	public override void _PhysicsProcess(double delta)
 	{
@@ -59,7 +53,7 @@ public partial class Bomb : CharacterBody3D
 		Velocity = v;
 
 		// Any solid contact ends the flight and sets the blast off: the ground, a
-		// chain node, anything. Which node it touched no longer decides the damage
+		// chain node, anything. Which node it touched does not decide the damage
 		// — the blast does, by distance (see ApplyBlastDamage), so a bomb that
 		// lands beside a node still hurts it.
 		if (MoveAndSlide())
@@ -79,7 +73,7 @@ public partial class Bomb : CharacterBody3D
 
 		// Hide the bomb itself
 		GetNode<MeshInstance3D>("MeshInstance3D").Visible = false;
-		
+
 		// Trigger the particles
 		if (ExplosionParticles != null)
 		{
@@ -90,7 +84,9 @@ public partial class Bomb : CharacterBody3D
 		// where they landed. Its own node, parented inside the scene, so it
 		// outlives this bomb — the bomb frees itself below while the marker is
 		// still fading.
-		BlastVisual.Spawn(this, GlobalPosition, DirectHitRadius, OuterRadius);
+		float direct = Unit?.DirectHitRadius ?? 0f;
+		float outer = Unit?.OuterRadius ?? 0f;
+		if (outer > 0f) BlastVisual.Spawn(this, GlobalPosition, direct, outer);
 
 		// Wait for particles to finish (lifetime is 0.5s)
 		await ToSignal(GetTree().CreateTimer(0.6f), SceneTreeTimer.SignalName.Timeout);
@@ -100,9 +96,9 @@ public partial class Bomb : CharacterBody3D
 	}
 
 	/// <summary>
-	/// Applies the blast to every node in range: full damage inside
-	/// <see cref="DirectHitRadius"/>, <see cref="HalfDamage"/> out to
-	/// <see cref="OuterRadius"/>, nothing past it.
+	/// Applies the blast to every node in range: full damage inside the unit's
+	/// <see cref="UnitDefinition.DirectHitRadius"/>, the match's falloff share of
+	/// it out to its <see cref="UnitDefinition.OuterRadius"/>, nothing past it.
 	///
 	/// Distance is measured along the ground (XZ), which is what the ground marker
 	/// draws: a bomb rests on or against whatever it hit, so its own height above
@@ -112,17 +108,26 @@ public partial class Bomb : CharacterBody3D
 	/// </summary>
 	private void ApplyBlastDamage()
 	{
-		float direct = Mathf.Max(0f, DirectHitRadius);
-		float outer = Mathf.Max(direct, OuterRadius);
-		if (outer <= 0f) return;
+		if (Unit == null || Rules == null)
+		{
+			// Only reachable if a bomb was spawned outside the launch path; inside
+			// a match both are always supplied.
+			GD.PushError("Bomb: launched without a unit definition or match rules — no damage dealt.");
+			return;
+		}
+
+		int directDamage = Unit.Damage;
+		float direct = Mathf.Max(0f, Unit.DirectHitRadius);
+		float outer = Mathf.Max(direct, Unit.OuterRadius);
+		if (directDamage <= 0 || outer <= 0f) return;
+
+		int outerDamage = Rules.OuterBandDamage(directDamage);
 
 		// A shape query finds the candidates without a node registry to keep in
 		// step. Explode() runs from _PhysicsProcess, which is where physics queries
-		// are safe to make. Nothing the blast can damage is missed: a node is only
-		// damaged out to `outer`, and at that distance its body still overlaps the
-		// query sphere (the sphere is centered on the bomb, a node at `outer` is
-		// within `outer` plus the node's own radius). Which band it lands in comes
-		// from the distance measured below.
+		// are safe to make. Nothing the blast can damage is missed: a node at
+		// `outer` is within `outer` plus its own radius of the query sphere.
+		// Which band it lands in comes from the distance measured below.
 		var query = new PhysicsShapeQueryParameters3D
 		{
 			Shape = new SphereShape3D { Radius = outer },
@@ -151,8 +156,8 @@ public partial class Bomb : CharacterBody3D
 			Vector3 offset = node.GlobalPosition - GlobalPosition;
 			float distance = new Vector2(offset.X, offset.Z).Length();
 
-			int damage = distance <= direct ? DirectHitDamage
-				: distance <= outer ? HalfDamage
+			int damage = distance <= direct ? directDamage
+				: distance <= outer ? outerDamage
 				: 0;
 
 			if (damage > 0) node.TakeDamage(damage);

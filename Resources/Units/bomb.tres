@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="UnitDefinition" load_steps=4 format=3]
+
+[ext_resource type="Texture2D" path="res://Assets/Bomb.png" id="1_fkjqj"]
+[ext_resource type="PackedScene" path="res://Scenes/bomb.tscn" id="2_vxha0"]
+[ext_resource type="Script" path="res://Scripts/Units/UnitDefinition.cs" id="3_n6caa"]
+
+[resource]
+script = ExtResource("3_n6caa")
+Id = "bomb"
+DisplayName = "Bomb"
+Traits = 2
+Damage = 3
+DirectHitRadius = 1.5
+OuterRadius = 3.0
+Icon = ExtResource("1_fkjqj")
+ProjectileScene = ExtResource("2_vxha0")

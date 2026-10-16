@@ -8,12 +8,16 @@ prototype built with **Godot 4.5.1 (C#/.NET)**. Read this before editing.
 - Engine: Godot 4.5.1 stable, GL Compatibility renderer, C# (.NET 8,
   `Godot.NET.Sdk/4.5.1`). Assembly name `MbcPrototype`.
 - Single scene: `Scenes/main_scene.tscn` (`res://`) — a 3D world where the
-  player and one AI enemy each control a chain of nodes, aim, and launch
-  projectiles or bombs, alternating turns. Turns resolve only after every
+  player and one AI enemy each control a chain of structures, aim, and launch
+  units from a roster, alternating turns. Turns resolve only after every
   in-flight event completes.
-- Both sides are the **same kind of thing** (`Combatant`): identical nodes,
-  ammo, launch path and defeat rule. The only difference is where the aim and
-  power come from (input vs. the AI). See *Combatants & turns* below.
+- Both sides are the **same kind of thing** (`Combatant`): identical structures,
+  the same roster, the same launch path and the same defeat rule. The only
+  difference is where the aim and power come from (input vs. the AI). See
+  *Combatants & turns* below.
+- Units are **data**: a `UnitDefinition` per unit in a `UnitCatalog` resource
+  (see *Unit data*). There are two today — `hub` and `bomb` — and adding a third
+  is a resource plus a behaviour, not a branch in the launcher.
 - Ground is a 10000×10000 plane (effectively infinite play space). The play
   area that matters today is around the origin; there is **no real map size
   yet**.
@@ -58,12 +62,13 @@ World (Node3D)
 ├── Ground (StaticBody3D, 10000x10000 plane)
 ├── Camera3D            # orthographic (projection=1), size=30, ~45° tilt
 ├── GameManager (Node)  # GameManager.cs — the main controller/singleton
-├── BaseNode            # the player's starting node (base_node.tscn)
+├── BaseNode            # the player's starting node (base_node.tscn), Definition = hub
 └── UI (CanvasLayer)
     ├── FireStrengthBar (ProgressBar)      # bottom, full width
     ├── Label                              # control hints
-    ├── Selector (ColorRect)               # ammo selector highlight
-    ├── HBoxContainer (NodeIcon, BombIcon) # ammo icons, bottom-left
+    ├── Selector (ColorRect)               # unit-selector highlight
+    ├── HBoxContainer                      # unit icons, bottom-left — filled
+    │                                      #   at runtime from the catalog
     ├── TurnLabel                          # top-right, round + whose move
     ├── DefeatLabel                        # centered, hidden until defeat
     ├── VictoryLabel                       # centered, hidden until victory
@@ -90,17 +95,55 @@ not stored in the scene. See [docs/camera](docs/camera/README.md).
 | `Scripts/Core/BaseNode.cs` | Chain node: health, highlight ring, cable to parent, health-bar SubViewport sprite (a divider line per point of health), destruction cascade. Knows its owning `OwnerChain`. |
 | `Scripts/Core/PlayerCombatant.cs` | The human's combatant: a `NodeChainCombatant` whose aim/charge/fire comes from input in `GameManager`. |
 | `Scripts/TurnSystem/Combatant.cs` | Abstract turn participant (team, defeat rule, `BeginTurn`/`EndTurn`). The rotation only ever talks to this. |
-| `Scripts/TurnSystem/NodeChainCombatant.cs` | Combatant built from a node chain: node registry, root lookup, defeat check, `Launch()`. |
-| `Scripts/Enemies/EnemyCombatant.cs` | The AI enemy: plans one action per turn (alternating node/bomb), random aim/power, fires after `ThinkTime`. |
-| `Scripts/Combat/AmmoLauncher.cs` | The single launch path for both sides (aim angle → velocity, ammo scene, `TurnEvent`). |
-| `Scripts/Combat/AmmoType.cs` | `AmmoType { Node, Bomb }`. |
-| `Scripts/Combat/Projectile.cs` | Ammo: a ballistic body that deploys a `BaseNode` where it lands, and resolves a `TurnEvent`. |
-| `Scripts/Combat/Bomb.cs` | Ammo: a ballistic body that detonates on contact and damages every `BaseNode` in its blast radii (see *Bomb blast*), resolving a `TurnEvent`. |
+| `Scripts/TurnSystem/NodeChainCombatant.cs` | Combatant built from a node chain: node registry, root lookup, defeat check, `Launch()`, and the `RootUnit` definition its root spawns with. |
+| `Scripts/Enemies/EnemyCombatant.cs` | The AI enemy: plans one action per turn (working through the catalog's buildable units), random aim/power, fires after `ThinkTime`. |
+| `Scripts/Units/UnitDefinition.cs` | **What a unit is**: the resource holding its numbers — level/energy cost, hit points, damage, blast radii, vision, build permission, icon, and the ammo scene. It replaces the old `AmmoType` enum. |
+| `Scripts/Units/UnitCatalog.cs` | The roster: the one list of units the HUD, the launcher and the AI read. `Find(id)`, `Buildable`, `Validate()`. |
+| `Scripts/Units/UnitTraits.cs` | `UnitTraits { Structure, Weapon }` — what a unit is, for code that does not know it by name. |
+| `Scripts/Rules/MatchRules.cs` | The match's global numbers (docs/parity §7). Today the blast falloff curve; later the clock, energy and ballistics. |
+| `Scripts/Combat/AmmoLauncher.cs` | The single launch path for both sides: takes a `UnitDefinition`, instantiates its scene, hands it an `AmmoLaunch`, registers the `TurnEvent`. |
+| `Scripts/Combat/ILaunchedAmmo.cs` | The behaviour interface every ammo scene's root implements — what replaced the launcher's `if (instance is Projectile) … else if (instance is Bomb)` chain. |
+| `Scripts/Combat/AmmoLaunch.cs` | The struct a shot is configured with: unit, match rules, origin, velocity, turn event. |
+| `Scripts/Combat/Projectile.cs` | Ammo: a ballistic body that deploys a `BaseNode` carrying its unit's definition where it lands, and resolves a `TurnEvent`. |
+| `Scripts/Combat/Bomb.cs` | Ammo: a ballistic body that detonates on contact and damages every `BaseNode` in its unit's blast radii (see *Unit data & the blast*), resolving a `TurnEvent`. |
 | `Scripts/Combat/BlastVisual.cs` | A blast's visuals: expanding translucent spheres over the damage radii, plus a ground marker (disc + a ring per radius) showing where they landed. Built in code, spawned by `Bomb`. |
 | `Scripts/TurnSystem/TurnEvent.cs` | One unit of turn resolution; the turn ends when all pending events resolve. |
 | `Scripts/World/PoolField.cs` | The map's purple pools: a fixed, grid-free scatter over the ground, one per-frame loop that pulses them all, and the pool queries future collision checks will use. |
 | `Scripts/World/PurplePool.cs` | One purple pool: a solid rounded square of energy with a rim of dead grass around it, pulsing between a resting violet and a bright glow. Knows its own footprint (`ContainsXZ`/`OverlapsXZ`). |
 | `Shaders/CableShader.gdshader` | Visual cable between chained nodes. |
+
+## Unit data (`Resources/`)
+
+**A unit is a resource, not a class.** Everything the game knows about one is on
+its `UnitDefinition`; the roster is a `UnitCatalog` that references those files.
+This is docs/parity §2's "no gameplay number in a `.cs` file" and M0.1, and it is
+the seam every later unit depends on.
+
+```
+Resources/Units/hub.tres            # Hub: level 7, 5 hit points, the launcher
+Resources/Units/bomb.tres           # Bomb: level 1, damage 3, radii 1.5 / 3.0
+Resources/Units/unit_catalog.tres   # the roster: hub, bomb (references, not copies)
+Resources/Rules/match_rules.tres    # the match's global numbers (blast falloff today)
+```
+
+- `GameManager.Catalog` and `GameManager.Rules` are the two references, assigned
+  in `main_scene.tscn`. `ResolveContent()` validates the catalog at match start
+  (duplicate ids, a unit with nothing to launch) — a content error is reported
+  there rather than swallowed.
+- A definition's `ProjectileScene` is its **behaviour**: that scene's root script
+  implements `ILaunchedAmmo`, so the launcher configures it without knowing what
+  it is. `UnitTraits` (`Structure`, `Weapon`) is what *other* code branches on.
+- The HUD's unit strip is built from `Catalog.Buildable` at match start, in
+  roster order, so an icon and a unit can never disagree. Q/E (and the
+  `switch_ammo_next`/`switch_ammo_previous` actions) step through that list.
+- **Adding a unit**: a new `.tres` referencing a new ammo scene, plus an entry in
+  `unit_catalog.tres`. Nothing in the launcher, the HUD or the turn code changes.
+- Values in a `.tres` that equal the C# field's default are not written out (that
+  is Godot's serializer, not a missing value); open the resource in the editor to
+  see everything a unit has.
+- The `hub.tres`/`bomb.tres` split is also where hit points live (§M0.2): a
+  structure's hit points are its definition's `HitPoints`, and there is no longer
+  one number for every node.
 
 ## Combatants & turns
 
@@ -155,25 +198,28 @@ Team/targeting details:
   the selection dies, control reverts to the player's chain root (a node with
   no valid parent).
 - **Aiming**: `aim_left`/`aim_right` rotate `_currentAimAngle` (A/D + arrow
-  keys); `fire_shot` charges a power bar; release launches the current ammo.
+  keys); `fire_shot` charges a power bar; release launches the current *unit*.
   The AI drives the same `_currentAimAngle`-equivalent through
   `ShowAimPreview()` and `AmmoLauncher`, so both sides shoot identically.
 - **Enemy tuning** (all exported on `GameManager`): `EnemyStartScreensRight`
   (default 2), `EnemyThinkTime`, `EnemyAimSpreadDegrees` (180 = fully random),
   `EnemyMinPower`/`EnemyMaxPower`, `CenterCameraOnActingCombatant`.
-- **Bomb blast**: a bomb damages by distance, not by what it touched. Exported
-  on `Bomb`: `DirectHitRadius` (1.5 world units) is the full-damage zone,
-  `OuterRadius` (3) the outer edge of the half-damage donut between them, and
-  past it a node takes nothing; `DirectHitDamage` (2) and `HalfDamage` (1) are
-  why `BaseNode.MaxHealth` is 6 rather than 3 — three direct bombs still
-  destroy a node, and a half hit is a whole point. Distance is measured along
-  the ground (XZ) from where the bomb went off, and **every** `BaseNode` in
-  range takes the damage, the firing combatant's own chain included.
-  `BlastVisual` spawns itself from `Bomb`, draws the same two radii as
-  expanding translucent spheres and as discs/rings on the ground, and frees
-  itself once its marker has faded. The health bar's divider lines are built
-  from `MaxHealth` (see `BaseNode.CreateHealthBarTicks`), so a hit that took
-  one point can be told from one that took two.
+- **Unit data & the blast**: every number a unit has lives on its
+  `UnitDefinition` (see *Unit data*), and the only numbers elsewhere are the
+  match's `MatchRules`. A weapon damages by distance, not by what it touched:
+  full `Damage` inside the unit's `DirectHitRadius`, the rules' falloff share of
+  it out to the unit's `OuterRadius`, nothing past it. Distance is measured along
+  the ground (XZ) from where the shot went off, and **every** `BaseNode` in range
+  takes the damage, the firing combatant's own chain included. `BlastVisual`
+  spawns itself from `Bomb`, draws the same two radii as expanding translucent
+  spheres and as discs/rings on the ground, and frees itself once its marker has
+  faded.
+- **Hit points**: `BaseNode.Health` starts at `MaxHealth`, which is its
+  definition's `HitPoints` (Hub 5, Bomb none — a Bomb is not a structure).
+  `TakeDamage` subtracts one point per point with **no armour threshold**, so
+  partial damage is the normal case: a Bomb (3) on a Hub (5) leaves 2. A node
+  with no definition falls back to a constant and says so — the fallback is for
+  running with no content, never the source of truth.
 - **Nothing spawned during a match is parented to the tree root.** Chain roots,
   ammo in flight, explosions and the nodes ammo deploys all go under
   `GameManager.SpawnContainer` (`NodeContainer`), and the player's starting
@@ -268,7 +314,9 @@ read it before touching anything camera-related. In short:
   Space is not bound to anything.
 - `aim_left`: A, Left arrow
 - `aim_right`: D, Right arrow
-- `switch_ammo_next`: E — `switch_ammo_previous`: Q
+- `switch_ammo_next`: E — `switch_ammo_previous`: Q. Despite the names (an
+  M0.1 leftover), these step through the catalog's buildable units, one at a
+  time and wrapping at both ends.
 
 ## Conventions & gotchas
 

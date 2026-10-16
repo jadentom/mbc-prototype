@@ -2,6 +2,7 @@ using Godot;
 using System.Collections.Generic;
 using MbcPrototype.Combat;
 using MbcPrototype.Core;
+using MbcPrototype.Units;
 
 namespace MbcPrototype.TurnSystem;
 
@@ -18,6 +19,15 @@ public abstract partial class NodeChainCombatant : Combatant
 {
 	/// <summary>Scene used for this combatant's starting root node.</summary>
 	[Export] public PackedScene NodeScene = GD.Load<PackedScene>("res://Scenes/base_node.tscn");
+
+	/// <summary>
+	/// The roster entry this combatant's chain starts from — the Hub, today —
+	/// used for a root this combatant spawns itself (and as the fallback for one
+	/// authored in a scene without a definition of its own). Set by the match
+	/// before the root is created; docs/parity M0.4 takes it from the map's start
+	/// positions instead.
+	/// </summary>
+	[Export] public UnitDefinition RootUnit;
 
 	/// <summary>The node the whole chain hangs from; null until the root is spawned.</summary>
 	public BaseNode RootNode { get; private set; }
@@ -45,6 +55,11 @@ public abstract partial class NodeChainCombatant : Combatant
 	{
 		if (root == null) return;
 
+		// A root authored in a scene carries its own definition; the match's
+		// starting unit is the fallback for one that does not (§2). Both are set
+		// before the node's _Ready reads them for its hit points.
+		if (root.Definition == null) root.Definition = RootUnit;
+
 		RootNode = root;
 		root.OwnerChain = this;
 		// BaseNode._Ready registers itself too; RegisterNode is idempotent.
@@ -53,8 +68,9 @@ public abstract partial class NodeChainCombatant : Combatant
 
 	/// <summary>
 	/// Spawns this combatant's starting root node at <paramref name="position"/>
-	/// and returns it. Ownership is set before the node enters the tree so its
-	/// _Ready registers it with this chain.
+	/// and returns it. Ownership and the unit definition are set before the node
+	/// enters the tree so its _Ready registers it with this chain and gives it
+	/// the right hit points.
 	/// </summary>
 	public BaseNode SpawnRoot(Vector3 position)
 	{
@@ -66,6 +82,7 @@ public abstract partial class NodeChainCombatant : Combatant
 
 		BaseNode root = NodeScene.Instantiate<BaseNode>();
 		root.OwnerChain = this;
+		root.Definition = RootUnit;
 		root.Position = position;
 		RootNode = root;
 
@@ -113,12 +130,12 @@ public abstract partial class NodeChainCombatant : Combatant
 	}
 
 	/// <summary>
-	/// Launches one piece of ammo from <paramref name="origin"/>. Goes through
-	/// the exact code path the player's shots use, and registers the TurnEvent
-	/// that keeps the turn open until the shot resolves.
+	/// Launches one unit from <paramref name="origin"/>. Goes through the exact
+	/// code path the player's shots use, and registers the TurnEvent that keeps
+	/// the turn open until the shot resolves.
 	/// </summary>
-	protected void Launch(AmmoType ammo, BaseNode origin, float aimAngleRadians, float powerPercent)
+	protected void Launch(UnitDefinition unit, BaseNode origin, float aimAngleRadians, float powerPercent)
 	{
-		AmmoLauncher.Launch(ammo, origin, aimAngleRadians, powerPercent, $"{DisplayName} {ammo}");
+		AmmoLauncher.Launch(unit, origin, aimAngleRadians, powerPercent, $"{DisplayName} {unit?.DisplayName ?? "?"}");
 	}
 }

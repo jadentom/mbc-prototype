@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="UnitCatalog" load_steps=4 format=3]
+
+[ext_resource type="Resource" path="res://Resources/Units/hub.tres" id="1_8ahom"]
+[ext_resource type="Resource" path="res://Resources/Units/bomb.tres" id="2_uhv74"]
+[ext_resource type="Script" path="res://Scripts/Units/UnitCatalog.cs" id="3_noiex"]
+
+[resource]
+script = ExtResource("3_noiex")
+Units = [ExtResource("1_8ahom"), ExtResource("2_uhv74")]

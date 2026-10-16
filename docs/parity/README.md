@@ -168,12 +168,12 @@ closes; the **size** column is a rough ordering device, not a promise.
 | --- | --- | --- | --- |
 | **Objective** | destroy the opponent's **main Hub** | destroy the enemy chain's root — `GameManager.EvaluateGameOver()` treats "no root" as defeat | ✅ aligned |
 | **Cord network** | the spatial system: reach, overlap rules, cord nodes, cascade, lights | implicit parent/child links only (`BaseNode.ParentBase`/`Children`, `CableShader`). No cord geometry, no reach, no overlap test, no cord nodes | **XL** |
-| **Durability** | **hit points** per unit type (the manual's *Armor* column), damage subtracted, partial damage normal | integer HP, but **one number for every node**: `BaseNode.MaxHealth = 6` | **M** |
-| **Blast damage** | a weapon damages what it strikes **and** what is near it, with a falloff curve nobody published | a two-band blast in `Bomb.ApplyBlastDamage()` (full inside 1.5 units, half to 3), with damage 2/1 rather than the Bomb's 3 | **M** — fine as a first guess, wrong as hardcoded fact |
+| **Durability** | **hit points** per unit type (the manual's *Armor* column), damage subtracted, partial damage normal | per unit type, from the unit's own resource: `UnitDefinition.HitPoints` (Hub 5), read by `BaseNode.MaxHealth` | ✅ M0.2 |
+| **Blast damage** | a weapon damages what it strikes **and** what is near it, with a falloff curve nobody published | the two-band model survives, but every number in it is data: radii and damage on the unit, the band share on `MatchRules`; the Bomb does the manual's 3 | ✅ M0.2 |
 | **Energy** | 1/3/7 per unit, max 35, per-round refill, income units | none | **L** |
 | **Turn model** | a turn is an energy budget; round ends when all have spent or skipped; order rotates left | one launch per turn; `CurrentTurn` counts rotation wraps | **L** |
-| **Units** | 18, three levels | 2: `AmmoType { Node, Bomb }`, hardcoded in `AmmoLauncher.Launch()` (`gm.ProjectileScene` / `gm.BombScene`) | **XL** |
-| **Tunability** | (our own requirement, §2) | every number is a C# field default, four of them in two places at once, and `main_scene.tscn` overrides no tuning value at all. Changing one means a rebuild | **M** |
+| **Units** | 18, three levels | 2 of 12 as resources: `hub` and `bomb` in a `UnitCatalog`; `AmmoLauncher` takes a `UnitDefinition` and dispatches through `ILaunchedAmmo` | **L** — ten units to go, and none of them needs a launcher change |
+| **Tunability** | (our own requirement, §2) | the roster, its numbers and the blast curve are resources; the launch forces, the pool scatter and the AI knobs are still C# defaults exported on `GameManager` | **M** — M0.7 finishes it |
 | **Players** | up to 4, teams, shared line of sight | exactly 2, hardcoded in `GameManager.CreateCombatants()` | **M** — generalise the shape, not the count |
 | **Map** | authored, sized, terrain states, wrap-around | flat 10000×10000 plane; play area approximated by `MinimapWorldSize = 475` | **XL** |
 | **Terrain height** | height changes launch range | none — everything sits at y=0 | **M** — three states, not four |
@@ -193,18 +193,21 @@ These are why the plan starts with a foundations phase instead of "add unit 3 of
 12". Each is a structural decision that every later feature depends on, and
 retrofitting any of them after the content exists costs several times more.
 
-1. **Units are code, not data.** `AmmoType` is a two-value enum and
-   `AmmoLauncher.Launch()` is an `if/else` over two `PackedScene` fields — with a
-   `// TODO: Switch this to inheritance and use an interface` already sitting on
-   line 62. Twelve units cannot live in a `switch`, and neither can the tuning
-   that goes with them.
-2. **Durability is one hardcoded number and the blast curve is invented.**
-   `BaseNode.MaxHealth = 6` is the same for every node and is reverse-engineered
-   from this repository's own bomb (three direct hits, "a half hit is a whole
-   point"), not from the original, where the Hub has 5 hit points, the Spy
-   Balloon 1, and a Bomb does a flat 3. The two-band blast is our *model* of a
-   curve the manual never published: legitimate as a first guess, wrong as a
-   constant inside `Bomb.cs`.
+1. ~~**Units are code, not data.**~~ **Landed in M0.1.** `AmmoType` was a
+   two-value enum and `AmmoLauncher.Launch()` an `if/else` over two
+   `PackedScene` fields, with a
+   `// TODO: Switch this to inheritance and use an interface` sitting on line 62.
+   A unit is now a `UnitDefinition` resource in a `UnitCatalog`, and the
+   launcher's dispatch is the behaviour interface `ILaunchedAmmo`. Twelve units
+   are twelve resources, not twelve branches.
+2. ~~**Durability is one hardcoded number and the blast curve is invented.**~~
+   **Landed in M0.2.** `BaseNode.MaxHealth` was 6 for every node, reverse
+   engineered from this repository's own bomb (three direct hits, "a half hit is
+   a whole point"). Hit points now come from the unit's definition (Hub 5) and
+   the blast's radii and damage from the firing unit, with the falloff between
+   them on `MatchRules`. The two-band shape is still our *model* of a curve the
+   manual never published — legitimate as a first guess, and now a number a
+   designer can change rather than a constant inside `Bomb.cs`.
 3. **There is no cord graph.** Build legality, the destruction cascade, Power
    Spike, EMP's reach along a network and the lineage lights are all cord
    operations. Today "chain" is an ad-hoc parent pointer.
@@ -248,29 +251,29 @@ original?".
 The load-bearing refactor. No new player-visible content; everything after this
 is cheap because of it.
 
-- **M0.1 — Unit definition resource.** Introduce `UnitDefinition` (a Godot
-  `Resource`) carrying: id, display name, level/energy cost, hit points, damage,
+- **M0.1 — Unit definition resource.** **Landed.** `UnitDefinition` is a Godot
+  `Resource` carrying: id, display name, level/energy cost, hit points, damage,
   blast radii, build permission, vision radius, projectile scene, and behaviour
-  flags. Replace `AmmoType` with the definition; make `AmmoLauncher` take a
-  `UnitDefinition` and dispatch through a behaviour interface rather than the
+  flags. `AmmoType` is gone; `AmmoLauncher` takes a `UnitDefinition` and
+  dispatches through `ILaunchedAmmo` rather than the
   `if (instance is Projectile) … else if (instance is Bomb)` chain. Units live
-  in a **catalog** (also a resource) so the HUD, the launcher and a future
-  scenario all read the same list.
-- **M0.2 — Hit points and the blast curve.** Move durability into the
-  definition: **hit points per unit type**, starting from the manual's *Armor*
-  column (Hub 5, Harvester 5, Anti-Air 3, Shield 3, Crawler 3, Repair 1,
-  Balloon 1). Delete the "MaxHealth = 6 because a half hit is a whole point"
-  reasoning in `BaseNode.cs` and the one-number-for-everything default.
+  in the `UnitCatalog` resource, which the HUD, the launcher and the AI all read.
+- **M0.2 — Hit points and the blast curve.** **Landed.** Durability lives in
+  the definition: **hit points per unit type**, starting from the manual's
+  *Armor* column (Hub 5 — the only structure in the roster so far). The
+  "MaxHealth = 6 because a half hit is a whole point" reasoning in
+  `BaseNode.cs` is deleted along with the one-number-for-everything default.
   - Damage is a **flat integer subtracted from the target's hit points**: a Bomb
     (damage 3) against a Hub (5) leaves 2, and partial damage is normal. There
     is **no armor threshold** — nothing in the original says damage that fails
     to exceed a unit's armor does nothing, and an earlier draft of this plan
     claimed otherwise. Read "Armor" in [units.md](units.md) as *hit points*.
   - A weapon also damages what is **near** where it goes off, with a falloff the
-    manual does not publish. The existing two-band model (full damage inside
-    `DirectHitRadius`, half out to `OuterRadius`) is a fine opening guess: move
-    the radii into unit definitions and the curve into the match rules, and give
-    the Bomb the manual's damage 3 rather than today's 2.
+    manual does not publish. The two-band model (full damage inside the unit's
+    `DirectHitRadius`, `MatchRules.BlastOuterBandFraction` of it out to its
+    `OuterRadius`, nothing past it) stays as the opening guess, with the radii on
+    the unit definition and the band share in the match rules, and the Bomb now
+    does the manual's damage 3 rather than the old 2 — its splash is 1.
 - **M0.3 — Structure vs. cord split.** `BaseNode` currently means both "a unit"
   and "the link in the network". Split into a `Structure` (hit points, ownership,
   vision, build permission, the cords it hangs from and anchors) and `Cord` (the
@@ -672,8 +675,8 @@ base should have, so that there is something solid to iterate on.
 - [ ] Round ends when both players spend out or skip
 - [ ] Player order shifts left each round
 - [ ] Skip forfeits the round's remaining turns
-- [ ] Hit points per unit type; damage subtracts; partial damage is normal
-- [ ] A weapon damages what it strikes **and** what is near it, on a tunable curve
+- [x] Hit points per unit type; damage subtracts; partial damage is normal
+- [x] A weapon damages what it strikes **and** what is near it, on a tunable curve
 - [ ] Cords cannot overlap; illegal launches refused
 - [ ] Nothing but a launcher grants build reach — and only a Hub is a launcher
 - [ ] Cord nodes take no damage except from a Power Spike

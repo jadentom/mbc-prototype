@@ -1,6 +1,7 @@
 using Godot;
 using MbcPrototype.Core;
 using MbcPrototype.TurnSystem;
+using MbcPrototype.Units;
 
 namespace MbcPrototype.Combat;
 
@@ -8,6 +9,11 @@ namespace MbcPrototype.Combat;
 /// The single place ammo is put into the world. Both the player and every AI
 /// combatant launch through here, so aiming conventions, power mapping and
 /// turn-event registration can never drift between them.
+///
+/// The launcher knows nothing about *which* unit it is firing: it takes a
+/// <see cref="UnitDefinition"/> from the roster (docs/parity §7), instantiates
+/// the scene that definition names, and hands the shot to that scene's
+/// behaviour through <see cref="ILaunchedAmmo"/>.
 /// </summary>
 public static class AmmoLauncher
 {
@@ -23,27 +29,33 @@ public static class AmmoLauncher
 	}
 
 	/// <summary>
-	/// Instantiates the given ammo from <paramref name="origin"/>, launches it
-	/// with the combatant's shared force settings, and registers the TurnEvent
-	/// that keeps the turn alive until the shot has fully resolved.
+	/// Instantiates the given unit's ammo from <paramref name="origin"/>,
+	/// launches it with the combatant's shared force settings, and registers the
+	/// TurnEvent that keeps the turn alive until the shot has fully resolved.
 	/// </summary>
-	/// <param name="ammo">Which ammo to launch.</param>
-	/// <param name="origin">The node the shot is launched from.</param>
+	/// <param name="unit">Which unit to fire, from the match's catalog.</param>
+	/// <param name="origin">The structure the shot is launched from.</param>
 	/// <param name="aimAngleRadians">Aim angle, in the aim-indicator convention.</param>
 	/// <param name="powerPercent">Charge level, 0..1, mapped onto the min/max launch force.</param>
-	/// <param name="description">Turn-event description, for debug logs.</param>
-	public static void Launch(AmmoType ammo, BaseNode origin, float aimAngleRadians, float powerPercent, string description)
+	/// <param name="description">Turn-event description, for debug logs (null uses the unit's name).</param>
+	public static void Launch(UnitDefinition unit, BaseNode origin, float aimAngleRadians, float powerPercent, string description)
 	{
 		GameManager gm = GameManager.Instance;
 		if (gm == null) return;
-		if (origin == null || !GodotObject.IsInstanceValid(origin) || origin.IsDestroyed) return;
 
-		PackedScene scene = (ammo == AmmoType.Node) ? gm.ProjectileScene : gm.BombScene;
-		if (scene == null)
+		// A missing definition is a content error, not a silent no-op: nothing
+		// was launched, so the caller's turn has no event to wait for.
+		if (unit == null)
 		{
-			GD.PushError($"AmmoLauncher: no scene assigned for {ammo} ammo.");
+			GD.PushError("AmmoLauncher: no unit definition to launch.");
 			return;
 		}
+		if (unit.ProjectileScene == null)
+		{
+			GD.PushError($"AmmoLauncher: unit '{unit.Id}' has no projectile scene to launch.");
+			return;
+		}
+		if (origin == null || !GodotObject.IsInstanceValid(origin) || origin.IsDestroyed) return;
 
 		float force = Mathf.Lerp(gm.MinLaunchForce, gm.MaxLaunchForce, Mathf.Clamp(powerPercent, 0f, 1f));
 		Vector3 velocity = (DirectionFromAimAngle(aimAngleRadians) * force) + (Vector3.Up * gm.UpwardBias);
@@ -51,32 +63,22 @@ public static class AmmoLauncher
 		// The projectile (and everything it triggers — landing, damage,
 		// destruction cascades, etc.) must fully resolve before control
 		// returns to the next combatant.
-		TurnEvent turnEvent = new TurnEvent(description ?? (ammo == AmmoType.Node ? "Node projectile" : "Bomb"));
+		TurnEvent turnEvent = new TurnEvent(description ?? unit.DisplayName);
 
-		var instance = scene.Instantiate<Node3D>();
+		var instance = unit.ProjectileScene.Instantiate<Node3D>();
 		// Set before AddChild: a node that is not in the tree yet has no global
 		// transform to read, and the spawn container sits at the origin, so the
 		// local transform is the global one.
 		instance.Position = origin.GlobalPosition + Vector3.Up * 2.0f;
 
-		// TODO: Switch this to inheritance and use an interface
-		if (instance is Projectile projectile)
+		if (instance is not ILaunchedAmmo ammo)
 		{
-			projectile.Velocity = velocity;
-			projectile.CreatorNode = origin;
-			projectile.TurnEvent = turnEvent;
-		}
-		else if (instance is Bomb bomb)
-		{
-			bomb.Velocity = velocity;
-			bomb.TurnEvent = turnEvent;
-		}
-		else
-		{
-			GD.PushError($"AmmoLauncher: {scene.ResourcePath} is not a supported ammo scene.");
+			GD.PushError($"AmmoLauncher: {unit.ProjectileScene.ResourcePath} ('{unit.Id}') has no ILaunchedAmmo behaviour on its root — the shot cannot be configured.");
 			instance.QueueFree();
 			return;
 		}
+
+		ammo.Initialize(new AmmoLaunch(unit, gm.Rules, origin, velocity, turnEvent));
 
 		// Parented inside the scene, never the tree root: a reload of the scene
 		// (how a finished match is restarted) frees the scene alone, so ammo

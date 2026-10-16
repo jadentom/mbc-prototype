@@ -1,20 +1,23 @@
 using Godot;
+using System.Collections.Generic;
 using MbcPrototype.Combat;
 using MbcPrototype.Core;
 using MbcPrototype.TurnSystem;
+using MbcPrototype.Units;
 
 namespace MbcPrototype.Enemies;
 
 /// <summary>
 /// A node-chain combatant driven by a simple AI. It is the player's mirror
-/// image: the same nodes, the same ammo, the same launch path and the same
+/// image: the same nodes, the same roster, the same launch path and the same
 /// defeat rule — the only difference is that its aim and power come from
 /// <see cref="ChooseAimAngle"/> and a random roll instead of from input.
 ///
 /// Each of its turns it plans exactly one action and releases it after
-/// <see cref="ThinkTime"/>, alternating a node projectile and a bomb. Override
-/// <see cref="ChooseAimAngle"/> (or the planning step in <see cref="BeginTurn"/>)
-/// to build a smarter enemy without touching the turn system.
+/// <see cref="ThinkTime"/>, working through the catalog's buildable units in
+/// order. Override <see cref="ChooseAimAngle"/> (or the planning step in
+/// <see cref="BeginTurn"/>) to build a smarter enemy without touching the turn
+/// system — docs/parity M6 replaces this with one real planner.
 /// </summary>
 public partial class EnemyCombatant : NodeChainCombatant
 {
@@ -54,12 +57,12 @@ public partial class EnemyCombatant : NodeChainCombatant
 	// The action planned at the start of the turn, released when the timer runs out.
 	private bool _acting;
 	private float _thinkTimer;
-	private AmmoType _plannedAmmo;
+	private UnitDefinition _plannedUnit;
 	private float _plannedAimAngle;
 	private float _plannedPowerPercent;
 
-	/// <summary>Alternates node, bomb, node, … across this enemy's turns.</summary>
-	private bool _launchNodeNext = true;
+	/// <summary>Where in the catalog's buildable list the next plan picks from.</summary>
+	private int _nextUnitIndex;
 
 	public override void BeginTurn()
 	{
@@ -70,18 +73,28 @@ public partial class EnemyCombatant : NodeChainCombatant
 			return;
 		}
 
+		// Works through the roster's buildable units in order — the whole list,
+		// so a new unit in the catalog is a unit this enemy may use. There is no
+		// judgement here; docs/parity M6 is where it learns to spend energy.
+		IReadOnlyList<UnitDefinition> buildable = GameManager.Instance?.Catalog?.Buildable;
+		if (buildable == null || buildable.Count == 0)
+		{
+			GD.PushError("EnemyCombatant: no buildable units in the match's catalog — nothing to launch.");
+			GameManager.Instance?.EndIdleTurn();
+			return;
+		}
+
 		_acting = true;
 		_thinkTimer = Mathf.Max(ThinkTime, 0f);
 
-		// Alternate a chain-extending node with a damaging bomb, starting with a node.
-		_plannedAmmo = _launchNodeNext ? AmmoType.Node : AmmoType.Bomb;
-		_launchNodeNext = !_launchNodeNext;
+		_plannedUnit = buildable[_nextUnitIndex % buildable.Count];
+		_nextUnitIndex++;
 
 		_plannedAimAngle = ChooseAimAngle();
 		_plannedPowerPercent = (float)GD.RandRange(MinPowerPercent, MaxPowerPercent);
 
 		Preview(0f);
-		GD.Print($"[Enemy] Planning {_plannedAmmo}: {Mathf.RadToDeg(_plannedAimAngle):0}°, power {_plannedPowerPercent:0.00}");
+		GD.Print($"[Enemy] Planning {_plannedUnit.DisplayName}: {Mathf.RadToDeg(_plannedAimAngle):0}°, power {_plannedPowerPercent:0.00}");
 	}
 
 	public override void EndTurn()
@@ -112,7 +125,7 @@ public partial class EnemyCombatant : NodeChainCombatant
 		if (_thinkTimer > 0f) return;
 
 		_acting = false;
-		Launch(_plannedAmmo, origin, _plannedAimAngle, _plannedPowerPercent);
+		Launch(_plannedUnit, origin, _plannedAimAngle, _plannedPowerPercent);
 
 		// If nothing could be launched (no ammo scene, dead origin) no TurnEvent
 		// was registered and the rotation would wait forever — spend the turn.

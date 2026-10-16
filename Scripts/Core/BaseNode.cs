@@ -1,12 +1,22 @@
 using Godot;
 using System.Collections.Generic;
 using MbcPrototype.TurnSystem;
+using MbcPrototype.Units;
 
 namespace MbcPrototype.Core;
 
 public partial class BaseNode : StaticBody3D
 {
 	[Export] public PackedScene ExplosionScene;
+
+	/// <summary>
+	/// What this structure is, from the roster: its hit points today, and later
+	/// its vision radius and what it may build. Authored on a node placed in a
+	/// scene, and stamped by the ammo that deploys one (see
+	/// <see cref="MbcPrototype.Combat.Projectile.Deploy"/>) before the node
+	/// enters the tree, so <see cref="_Ready"/> can read it.
+	/// </summary>
+	[Export] public UnitDefinition Definition;
 
 	public BaseNode ParentBase;
 	public List<BaseNode> Children = new List<BaseNode>();
@@ -57,18 +67,32 @@ public partial class BaseNode : StaticBody3D
 	private TurnEvent _destructionEvent;
 
 	/// <summary>
-	/// Health a fresh node spawns with. Six points rather than the three this
-	/// node used to have: a bomb's half-damage ring has to be a whole point (see
-	/// Bomb.HalfDamage), and a bomb's direct hit was doubled along with it, so a
-	/// node still takes exactly three direct bombs.
+	/// Hit points this structure spawns with, taken from its
+	/// <see cref="Definition"/> (docs/parity §7: the manual's <em>Armor</em>
+	/// column, which is hit points, not a damage threshold).
+	///
+	/// The constant below is the fallback for a node with no definition at all —
+	/// the project must still run with no content (§2) — and is never the source
+	/// of truth. A structure that is missing its definition is a content error
+	/// and says so in <see cref="_Ready"/>.
 	/// </summary>
-	[Export] public int MaxHealth = 6;
+	public int MaxHealth => Definition != null && Definition.HitPoints > 0
+		? Definition.HitPoints
+		: FallbackHitPoints;
+
+	/// <summary>Hit points used by a node whose definition is missing or has none of its own.</summary>
+	private const int FallbackHitPoints = 5;
 
 	/// <summary>Current health. Starts at <see cref="MaxHealth"/> and bottoms out at zero.</summary>
 	public int Health { get; private set; }
 
 	public override void _Ready()
 	{
+		if (Definition == null || Definition.HitPoints <= 0)
+		{
+			GD.PushWarning($"{Name}: no UnitDefinition with hit points assigned — using the {FallbackHitPoints}-hit-point fallback.");
+		}
+
 		Health = MaxHealth;
 
 		_highlight = GetNode<MeshInstance3D>("HighlightRing");
@@ -179,6 +203,11 @@ public partial class BaseNode : StaticBody3D
 		if (_highlight != null) _highlight.Visible = state;
 	}
 
+	/// <summary>
+	/// Subtracts <paramref name="amount"/> from this structure's hit points, one
+	/// point per point: there is no armour threshold, so partial damage is
+	/// normal and a Bomb (3) on a Hub (5) leaves 2. Reaching zero destroys it.
+	/// </summary>
 	public void TakeDamage(int amount)
 	{
 		if (amount <= 0) return;
