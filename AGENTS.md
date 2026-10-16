@@ -23,8 +23,11 @@ prototype built with **Godot 4.5.1 (C#/.NET)**. Read this before editing.
   [docs/parity/units.md](docs/parity/units.md) is the original's eighteen units,
   energy economy and world rules transcribed from the official manual. Read the
   plan before starting work that the roadmap already sequences — it names the
-  foundations (data-driven unit definitions, the subtractive armor model, the
-  cord graph, the energy/round loop) that later features depend on.
+  foundations (data-driven unit definitions, the hit-point model, the cord
+  graph, the energy/round loop) that later features depend on. The plan's §1
+  also fixes the **scope**: a 1v1 match against one AI on one hardcoded map,
+  twelve of the eighteen units, no wind, no water, no multiplayer. Read that
+  scope before building anything the spec describes but the scope excludes.
 
 ## Build & run
 

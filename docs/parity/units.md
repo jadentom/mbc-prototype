@@ -11,20 +11,33 @@ re-release, <http://cdn.akamai.steamstatic.com/steam/apps/254880/manuals/MoonBas
 Where the manual is ambiguous, this file says so in a **Note** rather than
 guessing. Read those before treating a number as final.
 
+> **Scope — this file is the original, not the plan.** It documents all
+> eighteen units, water and wind. The project builds a **subset**: see
+> [README.md](README.md) §1. Water and wind are out of scope, and six units
+> (Bridge, Tower, Mines, Reclaimer, Offensive Unit, Virus) are cut. Read the
+> scope first, or the roster below will look like a to-do list it is not.
+
 ## The two numbers that define combat
 
-- **Armor** is a unit's hit points, and it is **subtractive, not a health bar**.
-  A Bomb (Damage 3) hitting a Hub (Armor 5) leaves the Hub at 2 Armor. There is
-  no partial damage and no falloff — see the *Blast* note below.
-- **Damage** is a flat integer per weapon. A weapon that does not exceed the
-  target's remaining Armor does nothing at all.
+- **Hit points.** The manual's *Armor* column is a unit's **hit points**: how
+  much damage it takes before it is destroyed. A Bomb (Damage 3) hitting a Hub
+  (5 hit points) leaves the Hub at 2, and a second Bomb destroys it. **Partial
+  damage is normal.** There is no armor threshold, and no rule that damage
+  which fails to exceed a unit's armor does nothing — an earlier revision of
+  this file read the manual's *Armor* as a subtractive stat with a
+  minimum-damage rule, which is wrong. The project models it as hit points; see
+  [README.md](README.md), M0.2.
+- **Damage** is a flat integer per weapon, subtracted from the target's hit
+  points.
 
-> **Note — blast model.** The original resolves a weapon against the unit it
-> actually struck; it has no area-of-effect damage falloff for ordinary bombs.
-> Only EMP (disables everything in a radius) and Power Spike (travels a cord)
-> are explicitly area effects. The prototype's two-band blast (full damage
-> inside 1.5 units, half inside 3) is an invention of this repository, not a
-> reproduction of the original.
+> **Note — blast model.** A weapon damages the unit it strikes, and also units
+> close to where it goes off: the manual describes a Bomb as having a small
+> blast radius, so partial damage may be done to units near the explosion. It
+> does **not** publish that curve. The prototype's two-band blast (full damage
+> inside 1.5 units, half out to 3) is this repository's *model* of it — a tuning
+> unknown, not a transcription. EMP (disables everything in a radius) and Power
+> Spike (travels a cord) are the two effects whose **reach** the manual
+> describes, and even there only relatively ("larger than an Anti-Air's").
 
 ## Energy and levels
 
@@ -44,7 +57,7 @@ guessing. Read those before treating a number as final.
   | Main Hub | 7 |
   | Energy Collector on an energy pool | 3 |
   | Energy Collector on ordinary terrain | 1 |
-  | Reclaimer (armor absorbed, granted at end of round) | up to 5 from your own units, 3 from an opponent's |
+  | Reclaimer (hit points absorbed, granted at end of round) | up to 5 from your own units, 3 from an opponent's |
   | Bonus for reclaiming units and destroying opponents | manual does not quantify |
 
 - A Collector disabled by EMP or Virus at the moment the round ends yields
@@ -54,33 +67,35 @@ guessing. Read those before treating a number as final.
 
 Each faction has the same eighteen units with the same statistics and different
 art — the four factions are purely cosmetic, so **this project ships one set of
-units and no faction art** (see [README.md](README.md), *Non-goals*). **Level**
-is the energy cost.
+units and no faction art** (see [README.md](README.md) §1). **Level** is the
+energy cost. **HP** is the manual's *Armor* column, i.e. the unit's hit points;
+**Damage** is its flat damage per hit — see *The two numbers that define
+combat* above.
 
 ### Level 1 (1 energy)
 
-| Unit | Armor | Damage | Function and rules |
+| Unit | HP | Damage | Function and rules |
 | --- | --- | --- | --- |
 | **Anti-Air Missile Launcher** | 3 | — | Automatically fires a defensive missile at any enemy projectile within its range. The missile kills the projectile **unless** (a) the projectile is destroyed before the missile arrives, or (b) the missile hits an enemy shield. After firing, the launcher is **inactive for one full turn cycle** while it reloads. |
 | **Bomb** | — | 3 | Detonates on striking another unit or solid ground. |
 | **Bridge** | 3 | — | The only structure that lands safely **in water**, turning that area into safe flat land. Every rule that applies to flat land applies on top of a Bridge. If a Bridge is destroyed, any unit or cord on it drops into the water and is destroyed. |
 | **Cluster Bomb** | — | 1.5 × 3 | Splits into three smaller Bomblets at the apex of its flight arc. Each Bomblet behaves as a weaker Bomb. Its real value is drawing anti-air fire. |
-| **Repair** | 1 | heals 1 | Restores **1 Armor point** to any unit it hits — including enemy units, since the manual does not restrict it to friendly targets. |
-| **Tower** | 3 | — | Sits in the cord network, extending the network's reach, and expands your field of view so you can see more of the map while Fog is active. |
+| **Repair** | 1 | heals 1 | Restores **1 hit point** to any unit it hits — including enemy units, since the manual does not restrict it to friendly targets. |
+| **Tower** | 3 | — | Expands your field of view so you can see more of the map while Fog is active. It sits in the cord network but grants **no** build reach — see *Sources and confidence*. |
 ### Level 3 (3 energy)
 
-| Unit | Armor | Damage | Function and rules |
+| Unit | HP | Damage | Function and rules |
 | --- | --- | --- | --- |
 | **Guided Missile** | — | 3 | At the apex of its arc its guidance engages and it flies toward the **closest enemy unit**. If it arrives without being shot down or hitting an enemy shield, it inflicts exactly the same damage as a Bomb. |
 | **Spy Balloon** | 1 | — | Fragile: anything that touches it destroys it. Its whole point is providing vision **without needing a cord**, which matters under Fog. |
 | **EMP** | — | 2 | Travels like a Bomb, and on hitting the ground or an enemy unit **disables every unit within its range for one full turn cycle**. Units struck directly may additionally be damaged. Its area of effect is **larger than an Anti-Air unit's or a Shield's**. |
 | **Mines** | — | 3 | To arm, the Mine must land on the ground without colliding with an existing unit or Shield and without being intercepted by an Anti-Air missile. Once deployed it detects any unit moving nearby and detonates, damaging that unit. |
-| **Reclaimer** | — | absorbs armor | Absorbs a unit's Armor and transfers it to the launcher's owner **as energy at the end of the round**. Up to **5** Armor from the reclaimer's own units, **3** from an opponent's. |
+| **Reclaimer** | — | absorbs hit points | Absorbs a unit's hit points and transfers them to the launcher's owner **as energy at the end of the round**. Up to **5** from the reclaimer's own units, **3** from an opponent's. |
 | **Power Spike** | — | 3 | Sends damage **down each direction of a cord**, tapering off at a constant rate, with **no effect after travelling 50 cord nodes**. |
 
 ### Level 7 (7 energy)
 
-| Unit | Armor | Damage | Function and rules |
+| Unit | HP | Damage | Function and rules |
 | --- | --- | --- | --- |
 | **Crawler** | 3 | 4 (on detonation) | A freestanding bomb that **moves between rounds**, taking turns in the order of its "birth". It slips **underneath** enemy shields, and detonates only when it bumps into an enemy unit or cord — landing on solid ground does not set it off. It can be disabled by an EMP, and while disabled can be destroyed **without** triggering its charge. It can be reclaimed. It can be launched into, and travel under, water. |
 | **Energy Collector** | 5 | — | Yields 3 energy/round on an energy pool, 1 off it (see the economy table). When destroyed it produces **a large and violent explosion** — a hazard to whatever you built beside it. |
@@ -144,11 +159,17 @@ you may build, and it is what the destruction cascade propagates along.
 - Unit stats, energy economy, cord rules, destruction cascade, terrain states,
   wrapping, wind, fog and the objective: **official manual, pages 19–26** — high
   confidence, transcribed directly.
-- **The Tower's cord function** is confirmed by the project owner and is not a
-  manual-stated rule: the manual gives the Tower only a vision function, while
-  the *Strategies* section refers to penning Crawlers "behind a Tower cord".
-  Treat the cord-extending behaviour as **correct but unsourced** — it is design
-  intent here, not a transcription.
+- **The Tower grants vision only.** An earlier revision of this file claimed it
+  also extends the cord network; the project owner corrects that: a Tower is a
+  vision structure, and build reach comes from **launchers** — a Hub can build
+  another Hub, and every Hub is itself a launcher. Because no in-scope unit
+  grants reach, expand-and-fortify has to work from launchers alone
+  ([README.md](README.md), M2).
+- **Blast falloff exists but its curve does not.** The manual describes a Bomb's
+  small blast radius and the partial damage it does to nearby units, and the
+  project owner confirms it; no radius or curve is published anywhere. Every
+  blast number in the code is therefore tuning, not transcription
+  ([README.md](README.md) §6).
 - Repair's friendly/enemy targeting is **unstated** by the manual: it says "any
   unit it hits" without restricting it, which is read as including enemies.
 - Numbers the manual never gives (launch ranges, cord lengths, pool sizes,
