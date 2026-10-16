@@ -77,14 +77,18 @@ World (Node3D)
 ```
 
 Combatants are **not** in the scene, and neither is a starting structure:
-`GameManager.CreateCombatants()` builds both combatants and each spawns its own
-root at the start position the *map* gives its seat (docs/parity M0.4) — seat 0
-for the human, seat 1 for the AI. Spawned roots are parented under
-`GameManager.StructureContainer` (the tree root and the scene root both reject
-`AddChild` while the scene is still setting up), as is everything else spawned
-during a match — see *Key mechanics & invariants*.
+`MatchSetup.CreateCombatants()` makes one combatant per seat the map defines and
+each spawns its own root at that seat's start position (docs/parity M0.4). Roots
+are parented under `GameManager.StructureContainer` (the tree root and the scene
+root both reject `AddChild` while the scene is still setting up), as is
+everything else spawned during a match — see *Key mechanics & invariants*.
 
-The minimap is **built at runtime** by `GameManager.CreateMinimap()` (a
+The match's parts (world, camera, turn controller, setup) are created and wired
+by `GameManager._Ready()` and are its children at runtime; they are not authored
+in the scene yet, because their settings still live on `GameManager`'s exports
+and M8 is what gives the HUD its own nodes.
+
+The minimap is **built at runtime** by `MatchCamera.CreateMinimap()` (a
 `SubViewport` + top-down camera + `TextureRect` in the bottom-right corner),
 not stored in the scene. See [docs/camera](docs/camera/README.md).
 
@@ -92,7 +96,11 @@ not stored in the scene. See [docs/camera](docs/camera/README.md).
 
 | File | Role |
 | --- | --- |
-| `Scripts/Core/GameManager.cs` | Singleton (`GameManager.Instance`), combatant rotation + turn flow, aiming/firing for the player, camera (centering, **edge panning**, **minimap** — see [docs/camera](docs/camera/README.md)). |
+| `Scripts/Core/GameManager.cs` | The match's entry point and **facade** (docs/parity M0.6): input and aiming/firing for the player, the HUD, selection, the command log and the structure registry. It builds the parts below in `_Ready` and forwards to them, which is why call sites still say `GameManager.Instance`. |
+| `Scripts/Core/MatchSetup.cs` | **Builds the match**: resolves the roster/rules, settles the seed and the command log, and creates **one combatant per seat the map defines** (seat 0 is the human's, the rest are AI). Owns `Catalog`, `Rules`, `Seed`, `Random`, `Commands`, `Combatants`. |
+| `Scripts/TurnSystem/TurnController.cs` | **The turn flow**: the rotation, the pending `TurnEvent`s, the round counter, the outcome. It announces `TurnStarted`/`TurnCommitted`/`MatchEnded` and does not act for a seat — input, the AI or a replay does. |
+| `Scripts/Presentation/MatchCamera.cs` | **The view**: centering, edge panning, and the whole minimap (widget, coordinates, structure markers, pool markers, connection lines). Read-only over the match: it is handed the structures each frame. |
+| `Scripts/World/MatchWorld.cs` | **The world**: the map it loaded, the bounds the minimap and the pools use, the pools themselves, and where each seat starts. |
 | `Scripts/Core/Structure.cs` | A unit on the map: hit points from its definition, highlight ring, health-bar SubViewport sprite (a divider line per point of health), the cords it hangs from and anchors, destruction cascade. Knows its owning `OwnerChain`. |
 | `Scripts/Core/Cord.cs` | **The link in the network**: the geometry between two structures (parent, child, length) plus the cable mesh. Built by the child structure in `_Ready`, parented under it, and what the destruction cascade runs down. |
 | `Scripts/Core/PlayerCombatant.cs` | The human's combatant: a `NodeChainCombatant` whose aim/charge/fire comes from input in `GameManager`. |
@@ -134,9 +142,9 @@ Resources/Rules/match_rules.tres    # the match's global numbers (blast falloff 
 ```
 
 - `GameManager.Catalog` and `GameManager.Rules` are the two references, assigned
-  in `main_scene.tscn`. `ResolveContent()` validates the catalog at match start
-  (duplicate ids, a unit with nothing to launch) — a content error is reported
-  there rather than swallowed.
+  in `main_scene.tscn` and handed to `MatchSetup.Build()`. It validates the
+  catalog at match start (duplicate ids, a unit with nothing to launch) — a
+  content error is reported there rather than swallowed.
 - A definition's `ProjectileScene` is its **behaviour**: that scene's root script
   implements `ILaunchedAmmo`, so the launcher configures it without knowing what
   it is. `UnitTraits` (`Structure`, `Weapon`) is what *other* code branches on.
@@ -159,17 +167,19 @@ Resources/Rules/match_rules.tres    # the match's global numbers (blast falloff 
 
 **The map is a resource too.** `MapDefinition` holds the play area, the height
 field, the energy pools and the start positions; `GameManager.Map` is the one
-reference, assigned in `main_scene.tscn`, and `ResolveContent()` validates it at
-match start (a size, two start positions, a height field that matches its grid).
+reference, assigned in `main_scene.tscn`, handed to `MatchWorld.Build()`, and
+validated there at match start (a size, two start positions, a height field that
+matches its grid).
 
 ```
 Resources/Maps/development_map.tres   # 475x475, flat, pool side 6 at 1% coverage,
                                       #   seats at (-50, 0) and (50, 0)
 ```
 
-- **Bounds** (`Center`, `Size`) are the play area in world XZ. `Bounds` is what
-  `GetMinimapWorldRect()` returns, so the minimap shows the map and rescales with
-  it; `Extent` is the larger axis, which is the minimap camera's ortho size.
+- **Bounds** (`Center`, `Size`) are the play area in world XZ. `MatchWorld.Bounds`
+  is what `MatchCamera.WorldRect` returns, so the minimap shows the map and
+  rescales with it; `Extent` is the larger axis, which is the minimap camera's
+  ortho size.
 - **The height field** (`GridWidth`/`GridHeight`, `Terrain`, `TerrainHeights`) is
   painted but **flat**: the development map's one cell is `Ground`, and the
   per-state heights (ground 0, plateau 2, mountain 4 — a first guess, §7) are read
@@ -178,11 +188,11 @@ Resources/Maps/development_map.tres   # 475x475, flat, pool side 6 at 1% coverag
   no water (§1).
 - **Pools**: `MapDefinition.CreatePoolField()` scatters them over the map's own
   bounds, so pools, minimap and start positions agree on where the map is. Zero
-  `PoolSide` or coverage means a map with no pools. `GameManager.CreatePools()`
-  calls it and nothing else knows a pool's size.
+  `PoolSide` or coverage means a map with no pools. `MatchWorld.Build()` calls it
+  and nothing else knows a pool's size.
 - **Start positions** are seats, in order: seat 0 is the human's, seat 1 the
-  AI's, and `GameManager.CreateCombatants()` spawns each chain's root at its
-  seat's position. Nothing about where a match begins is authored in the scene or
+  AI's, and `MatchSetup.CreateCombatants()` spawns each chain's root at its
+  seat's position (`MatchWorld.SeatPosition`). Nothing about where a match begins is authored in the scene or
   derived from the window any more (docs/parity M0.4) — M6's setup screen chooses
   between maps rather than positions.
 - **Adding a map**: a new `.tres`. One is shipped and all of development happens
@@ -190,26 +200,31 @@ Resources/Maps/development_map.tres   # 475x475, flat, pool side 6 at 1% coverag
 
 ## Combatants & turns
 
-Authoritative flow, all in `GameManager`:
+Authoritative flow: `MatchSetup` builds the match, `TurnController` runs the
+rotation, and `GameManager` decides who acts for each seat.
 
-- `CreateCombatants()` is the **only** place opponents are declared: build the
-  combatant, `AddChild` it, add it to `_combatants`, give it a root. Adding a
-  second enemy, or a non-node-based one, means deriving from `Combatant` (not
-  necessarily `NodeChainCombatant`) and adding it there with another `Team`.
-- `StartTurn()` gives the turn to one combatant: a player-controlled one gets
-  `IsPlayerTurn = true` and a fresh `SelectStructure()`; an AI one gets
-  `IsPlayerTurn = false`, the camera centered on its action structure, and
-  `BeginTurn()`.
+- `MatchSetup.CreateCombatants()` is the **only** place opponents are declared,
+  and it makes one per seat the map defines — seat 0 player-controlled, every
+  other seat an AI on a team of its own. A map with three seats is a three-way
+  match; `1v1` is what today's map says, not an assumption in the code (§1,
+  *Built for expansion*). Adding a different *kind* of combatant means deriving
+  from `Combatant` in there.
+- `TurnController.StartTurn()` announces `TurnStarted` and does nothing else.
+  `GameManager.OnTurnStarted()` decides who acts: a replayed command log, the
+  human's input (`IsPlayerTurn = true` and a fresh `SelectStructure()`), or the
+  combatant's own brain (camera on its action structure, then `BeginTurn()`).
+- `TurnController` also raises `TurnCommitted` (GameManager cancels a charge in
+  progress) and `MatchEnded` (GameManager shows the outcome labels).
 - `CompleteTurn()` runs when the pending-event list drains: it ends the acting
   combatant's turn, evaluates the match, and otherwise queues the advance —
   `QueueTurnAdvance()` defers `AdvanceTurn()` to idle time, because a turn can end
   from inside `_ExitTree` where the tree is locked (see *Determinism*).
 - An AI combatant **must** either register a `TurnEvent` during its turn or
   call `GameManager.EndIdleTurn()`, otherwise the rotation would wait forever.
-- Win/lose: `EvaluateGameOver()` ends the match when a whole `Team` has no
-  combatant left that can act — `VICTORY` if only the player's team is left,
-  `DEFEAT` otherwise. Because destroying a root cascades down its cords through
-  the whole chain, "the enemy's root was destroyed" is exactly this check.
+- Win/lose: `TurnController.EvaluateOutcome()` ends the match when a whole
+  `Team` has no combatant left that can act — `VICTORY` if only the player's team
+  is left, `DEFEAT` otherwise. Because destroying a root cascades down its cords
+  through the whole chain, "the enemy's root was destroyed" is exactly this check.
 - `CurrentTurn` counts **rounds** (it advances when the rotation wraps), and
   the turn label shows the round plus whose move it is.
 - Game over: `_UnhandledInput` restarts the match on any key/click by
@@ -239,7 +254,7 @@ Team/targeting details:
 
 ## Key mechanics & invariants
 
-- **Turn system**: the first `RegisterTurnEvent` commits the turn
+- **Turn system**: the first event registered on the `TurnController` commits the turn
   (`IsPlayerTurn=false`, `IsResolvingTurn=true`); control returns in
   `CompleteTurn()` when the pending-event list drains. `Structure.Destroy()`
   registers a `TurnEvent` resolved in `_ExitTree` so destruction cascades
@@ -347,8 +362,8 @@ change reached the simulation.
 
 ## Purple pools
 
-`GameManager.CreatePools()` lays a fixed `PoolField` of `PurplePool`s over the
-map's ground at match start. Nothing reads a pool yet — they are decoration with
+`MatchWorld.Build()` lays a fixed `PoolField` of `PurplePool`s over the map's
+ground at match start. Nothing reads a pool yet — they are decoration with
 a query API, and the collision checks they exist for are not written.
 
 - **The layout is fixed, not generated.** `PoolField.Scatter()` takes as many
@@ -414,13 +429,13 @@ Full documentation lives in **[docs/camera/README.md](docs/camera/README.md)** �
 read it before touching anything camera-related. In short:
 
 - Main camera: orthographic, tilted ~45°, looking down toward -Z.
-- `CenterCameraOn()` tweens to `target.XZ + _cameraOffset`; the tween is
+- `MatchCamera.CenterOn()` tweens to `target.XZ + _cameraOffset`; the tween is
   killed whenever the player pans so pan never fights centering.
-- `HandleCameraPanning()` (edge panning) requires window focus, the OS cursor
-  inside the window, and no hovered Control.
-- Minimap: a runtime-built square `SubViewport` with a top-down camera,
-  rendered into a `TextureRect` (bottom-right); every world↔minimap mapping
-  goes through `GetMinimapWorldRect()`, which is the map's bounds — change
+- `MatchCamera.Pan()` (edge panning) requires window focus, the OS cursor inside
+  the window, and no hovered Control.
+- Minimap: a runtime-built square `SubViewport` with a top-down camera, rendered
+  into a `TextureRect` (bottom-right); every world↔minimap mapping goes through
+  `MatchCamera.WorldRect`, which is the map's bounds — change
   `MapDefinition.Size` and the minimap rescales with it.
 
 ## Input map (`project.godot`)

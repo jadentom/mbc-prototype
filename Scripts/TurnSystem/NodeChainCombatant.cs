@@ -31,6 +31,14 @@ public abstract partial class NodeChainCombatant : Combatant
 	/// </summary>
 	[Export] public UnitDefinition RootUnit;
 
+	/// <summary>
+	/// Where this combatant's spawned structures are parented: the match's
+	/// structure container, set by the setup before a root is spawned (docs/parity
+	/// M0.6 — the combatant is told where the match lives rather than asking a
+	/// singleton).
+	/// </summary>
+	public Node3D StructureContainer { get; set; }
+
 	/// <summary>The structure the whole chain hangs from; null until the root is in place.</summary>
 	public Structure RootStructure { get; private set; }
 
@@ -73,7 +81,7 @@ public abstract partial class NodeChainCombatant : Combatant
 		// Parented under the GameManager's structure container (see
 		// GameManager.StructureContainer) instead of the tree root, so a combatant
 		// can spawn its root during scene setup. Falls back to the tree root.
-		Node parent = GameManager.Instance?.StructureContainer;
+		Node parent = StructureContainer ?? GameManager.Instance?.StructureContainer;
 		if (parent == null) parent = GetTree().Root;
 		parent.AddChild(root);
 		return root;

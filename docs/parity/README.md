@@ -233,9 +233,13 @@ retrofitting any of them after the content exists costs several times more.
    hash it lands in. What is still wall-clock-paced — the AI's think time and the
    cascade's one second per generation — is called out in `AGENTS.md`; the cascade
    belongs to M2.
-7. **`GameManager.cs` is a 1355-line god object** owning turn flow, aiming,
-   combatant creation, camera, minimap, pools and input. It will not survive
-   contact with twelve units.
+7. ~~**`GameManager.cs` is a 1355-line god object**~~ **Landed in M0.6.** Turn
+   flow, camera/minimap, map/world and match setup are separate nodes, and the
+   match no longer knows how many combatants it has: `MatchSetup` makes one per
+   seat the map defines. `GameManager` is still the entry point and the facade
+   call sites use (`GameManager.Instance` was kept on purpose, per this plan), so
+   it is ~1000 lines of input, HUD and forwarding rather than 1831 of everything —
+   M8 takes the HUD and M7 the summary, and the forwards go with them.
 8. **Tuning lives in code, and sometimes twice.** Every gameplay number is a C#
    field default, and the four `EnemyCombatant` knobs are *also* exported on
    `GameManager`, so the same numbers exist in two places. §2 makes this the
@@ -317,10 +321,21 @@ is cheap because of it.
   hash makes a replay checkable. This is what makes replays (M7), regression
   testing (§6) and iteration-on-a-replay (§2) possible — and the harness already
   does all three.
-- **M0.6 — Split `GameManager`.** Turn flow, camera/minimap, map/world, and
-  match setup become separate nodes, and the match stops knowing how many
-  combatants there are. Keep `GameManager.Instance` during the transition so
-  call sites do not all change at once.
+- **M0.6 — Split `GameManager`.** **Landed.** Four parts, each owning one job:
+  `MatchWorld` (the map, its bounds and its pools), `MatchCamera` (centering,
+  panning and the whole minimap), `TurnController` (the rotation, the turn events,
+  the round, the outcome) and `MatchSetup` (the roster, the rules, the seed, the
+  command log and the combatants). `TurnController` announces `TurnStarted` and
+  does not act for a seat — input, the AI or a replay does — which is what let the
+  replay driver stay out of the turn system. The match stops knowing how many
+  combatants there are: one is created per seat the map defines, so a three-seat
+  map is a three-way match. `GameManager.Instance` was kept, as this plan asked,
+  so call sites did not all change at once; what remains in it is input, the HUD,
+  selection, the command log and the structure registry.
+
+  Landed with the M0.5 harness as the check: the same command log produces the
+  same state hash as before the split (`c6cd89abf0971af6`, 10 rounds, seed 7),
+  which is how a refactor this size is known to be behaviour-preserving.
 - **M0.7 — Tuning data and the dev overlay.** All the numbers from §7 in
   resources — a `MatchRules` resource for the global ones, per-unit values in
   their definitions, world values in the map — with the code's literals deleted

@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Text;
 using MbcPrototype.Combat;
 using MbcPrototype.Enemies;
+using MbcPrototype.Presentation;
 using MbcPrototype.Rules;
 using MbcPrototype.Simulation;
 using MbcPrototype.TurnSystem;
@@ -30,9 +31,6 @@ public partial class GameManager : Node
 	[Export] public float MaxLaunchForce = 20.0f;
 	[Export] public float ChargeSpeed = 1.0f; // 1.0 = fills in 1 second
 
-	[ExportGroup("Camera Settings")]
-	[Export] public float CameraSmoothTime = 0.5f;
-
 	[ExportGroup("Enemy")]
 	/// <summary>Seconds the enemy spends aiming before it releases its shot.</summary>
 	[Export] public float EnemyThinkTime = 1.0f;
@@ -44,42 +42,6 @@ public partial class GameManager : Node
 	[Export(PropertyHint.Range, "0,1")] public float EnemyMaxPower = 0.9f;
 	/// <summary>Center the camera on whichever combatant is acting, so a move somewhere else on the map is visible.</summary>
 	[Export] public bool CenterCameraOnActingCombatant = true;
-
-	[ExportGroup("Camera Panning")]
-	[Export] public float PanSpeed = 60.0f;
-	[Export] public int PanEdgeMargin = 48;
-	[Export] public Vector2 PanBoundsMin = new Vector2(-5000, -5000);
-	[Export] public Vector2 PanBoundsMax = new Vector2(5000, 5000);
-
-	[ExportGroup("Minimap")]
-	// On-screen minimap side as a fraction of the window's shorter side
-	// (e.g. 0.25 -> 162px at 648px window height, 270px at 1080p).
-	[Export(PropertyHint.Range, "0.05, 0.5")]
-	public float MinimapScreenFraction = 0.25f;
-	[Export] public Color MinimapViewRectColor = new Color(1, 1, 1, 0.4f);
-	// Node dots are drawn this many minimap pixels square, centred on the node.
-	// Big enough to pick out at a glance: the whole map is 475 world units across
-	// a widget a quarter of the window's shorter side.
-	[Export] public Vector2 MinimapMarkerSize = new Vector2(6, 6);
-	[Export] public Color MinimapStructureColor = new Color(0, 0, 0, 0.9f);
-	[Export] public Color MinimapEnemyStructureColor = new Color(0.9f, 0.1f, 0.1f, 0.95f);
-	[Export] public Color MinimapSelectedStructureColor = new Color(1, 1, 0, 1);
-	[Export] public Color MinimapLineColor = new Color(0, 0, 0, 0.7f);
-	// Chain cables on the minimap, in minimap pixels. Matched to the dots: a
-	// thinner line between 6-pixel markers reads as a gap rather than as a chain.
-	[Export] public float MinimapLineWidth = 2.0f;
-	/// <summary>
-	/// Colour the minimap draws pools in: the pool's lit colour, and constant.
-	/// The minimap is a map, not a window — a field of 60-odd squares pulsing out
-	/// of phase would be noise where the player wants to read positions.
-	/// </summary>
-	[Export] public Color MinimapPoolColor = PurplePool.LitColor;
-	/// <summary>
-	/// Smallest a pool marker may be drawn on the minimap, in minimap pixels. A
-	/// pool is 6 world units across a 475-unit map, which is barely one pixel on
-	/// the widget: without a floor the markers could not be seen at all.
-	/// </summary>
-	[Export] public float MinimapPoolMarkerSize = 3.0f;
 
 	[ExportGroup("UI References")]
 	/// <summary>
@@ -124,17 +86,73 @@ public partial class GameManager : Node
 	/// </summary>
 	[Export] public MapDefinition Map;
 
-	public Structure SelectedStructure;
+	// ------------------------------------------------------------------
+	// The match's parts (docs/parity M0.6)
+	//
+	// Each owns one job and is built in _Ready: the world (the map and its
+	// pools), the camera (view, panning, minimap), the turn flow, and the setup
+	// that resolves the content and builds the combatants. GameManager remains
+	// the match's entry point and the facade everything already calls — the
+	// forwards below exist so call sites do not all have to change at once.
+	// ------------------------------------------------------------------
+
+	/// <summary>The world this match is fought in: its map, its bounds, its pools.</summary>
+	public MatchWorld World { get; private set; }
+
+	/// <summary>The match's view: the camera and the minimap.</summary>
+	public MatchCamera Camera { get; private set; }
+
+	/// <summary>The match's turn flow: rotation, turn events, round, outcome.</summary>
+	public TurnController Turns { get; private set; }
+
+	/// <summary>The match's content and combatants.</summary>
+	public MatchSetup Setup { get; private set; }
+
+	/// <summary>The scene's UI layer, shared with the parts that draw into it.</summary>
+	public CanvasLayer UiLayer { get; private set; }
+
+	/// <summary>The seed this match runs on (see <see cref="MatchSeed"/>).</summary>
+	public int Seed => Setup?.Seed ?? 0;
 
 	/// <summary>
-	/// The map's purple pools, or null when the map asks for none.
-	///
-	/// Nothing reads a pool yet: the pools are decoration. This is the hook the
-	/// future collision checks use — <c>Pools.PoolAt(position)</c> for a point and
-	/// <c>Pools.OverlappingPools(centre, radius, buffer)</c> for something with a
-	/// size.
+	/// The match's own random number generator, seeded from <see cref="Seed"/>.
+	/// Every random choice in the simulation must come from here rather than from
+	/// the global generator: the global one is shared with the engine and the
+	/// editor, so anything drawn from it depends on what else happened to run.
 	/// </summary>
-	public PoolField Pools { get; private set; }
+	public RandomNumberGenerator Random => Setup?.Random;
+
+	/// <summary>
+	/// The ordered log of everything this match has been told to do — the match's
+	/// input, and what a replay is made of (docs/parity M0.5).
+	/// </summary>
+	public CommandLog Commands => Setup?.Commands;
+
+	/// <summary>Every combatant in the match, in seat order. Read by the AI for its targets.</summary>
+	public IReadOnlyList<Combatant> Combatants => Setup?.Combatants ?? System.Array.Empty<Combatant>();
+
+	/// <summary>The combatant whose turn it currently is (null before the match starts).</summary>
+	public Combatant ActiveCombatant => Turns?.ActiveCombatant;
+
+	/// <summary>Current round number. Starts at 1 and advances when the rotation wraps.</summary>
+	public int CurrentTurn => Turns?.Round ?? 1;
+
+	/// <summary>True while the player may aim / charge / select structures / fire.</summary>
+	public bool IsPlayerTurn => Turns?.IsPlayerTurn ?? false;
+
+	/// <summary>True while a turn's events are still resolving (control is locked).</summary>
+	public bool IsResolvingTurn => Turns?.IsResolving ?? false;
+
+	/// <summary>True once the match has been won or lost; input restarts the scene.</summary>
+	public bool IsGameOver => Turns?.IsOver ?? false;
+
+	/// <summary>The map's purple pools, or null when the map asks for none.</summary>
+	public PoolField Pools => World?.Pools;
+
+	/// <summary>The human's combatant: seat 0, the one the player drives.</summary>
+	private Combatant HumanCombatant => Setup?.HumanCombatant;
+
+	public Structure SelectedStructure;
 
 	/// <summary>
 	/// The buildable units in catalog order, and the HUD icon built for each one.
@@ -147,15 +165,6 @@ public partial class GameManager : Node
 
 	/// <summary>Which entry of <see cref="_buildableUnits"/> the player has selected.</summary>
 	private int _currentUnitIndex;
-
-	/// <summary>The combatant whose turn it currently is (null before the match starts).</summary>
-	public Combatant ActiveCombatant { get; private set; }
-
-	/// <summary>Every combatant in the match, in turn order. Read by the AI to find its targets.</summary>
-	public IReadOnlyList<Combatant> Combatants => _combatants;
-
-	/// <summary>True once the match has been won or lost; input restarts the scene.</summary>
-	public bool IsGameOver { get; private set; } = false;
 
 	/// <summary>
 	/// Container that spawned chain roots are parented under. A combatant may
@@ -191,18 +200,6 @@ public partial class GameManager : Node
 		}
 	}
 
-	/// <summary>Current round number. Starts at 1 and advances when the rotation wraps around.</summary>
-	public int CurrentTurn { get; private set; } = 1;
-
-	/// <summary>True while the player may aim / charge / select nodes / fire.</summary>
-	public bool IsPlayerTurn { get; private set; } = true;
-
-	/// <summary>
-	/// True while a turn's events are still resolving (control is locked).
-	/// A turn is committed the moment its first TurnEvent is registered.
-	/// </summary>
-	public bool IsResolvingTurn { get; private set; } = false;
-
 	/// <summary>
 	/// How many physics steps this match has taken — the simulation's own clock, as
 	/// opposed to frame time (docs/parity M0.5: a step that affects the simulation
@@ -215,63 +212,16 @@ public partial class GameManager : Node
 	/// </summary>
 	public int SimulationTicks { get; private set; }
 
-	/// <summary>The seed this match is running on (see <see cref="MatchSeed"/>).</summary>
-	public int Seed { get; private set; }
-
-	/// <summary>
-	/// The match's own random number generator, seeded from <see cref="Seed"/>.
-	/// Every random choice in the simulation must come from here rather than from
-	/// the global generator: the global one is shared with the engine and the
-	/// editor, so anything drawn from it depends on what else happened to run.
-	/// </summary>
-	public RandomNumberGenerator Random { get; private set; }
-
-	/// <summary>
-	/// The ordered log of everything this match has been told to do — the match's
-	/// input, and what a replay is made of (docs/parity M0.5).
-	/// </summary>
-	public CommandLog Commands { get; private set; }
-
 	/// <summary>The unit the player would fire right now (null when the roster is empty).</summary>
 	public UnitDefinition CurrentUnit => _currentUnitIndex >= 0 && _currentUnitIndex < _buildableUnits.Count
 		? _buildableUnits[_currentUnitIndex]
 		: null;
 
-	private Vector3 _cameraOffset;
 	private float _currentAimAngle = 0f;
 	private MeshInstance3D _aimIndicator;
 	private float _currentPowerPercent = 0f;
 	private bool _isCharging = false;
 	private bool _isChargingUp = true;
-
-	// In-flight camera centering tween, killed the moment the player pans.
-	private Tween _cameraTween;
-
-	// Minimap widgets (created at runtime in CreateMinimap).
-	private SubViewport _minimapViewport;
-	private Camera3D _minimapCamera;
-	private TextureRect _minimapRect;
-	private ColorRect _minimapFrame;
-	private ColorRect _minimapViewIndicator;
-	private Vector2I _lastMinimapPixelSize = Vector2I.Zero;
-
-	// Structure markers on the minimap (Structure -> dot), reconciled every frame.
-	private readonly Dictionary<Structure, ColorRect> _minimapMarkers = new Dictionary<Structure, ColorRect>();
-
-	// Pool markers on the minimap, one per pool in field order. Flat squares in
-	// MinimapPoolColor: the pools' own 3D geometry is on PurplePool.WorldRenderLayer
-	// and excluded from the minimap camera, so what shows here does not pulse.
-	private readonly List<ColorRect> _minimapPoolMarkers = new List<ColorRect>();
-	private Node2D _minimapPoolLayer;
-
-	// Connection lines on the minimap (child structure -> line to its parent),
-	// reconciled every frame. Drawn under the markers via a dedicated layer.
-	private readonly Dictionary<Structure, Line2D> _minimapLines = new Dictionary<Structure, Line2D>();
-	private Node2D _minimapLineLayer;
-
-	// True while the OS cursor is inside the game window. Edge panning is
-	// disabled otherwise so a stale edge position never keeps panning.
-	private bool _mouseInsideWindow = true;
 
 	// Ids handed to structures as they register: the roots first, then whatever
 	// shots deploy, in the order the simulation creates them — which is what makes
@@ -285,17 +235,6 @@ public partial class GameManager : Node
 	private CommandLog _replay;
 	private int _replayIndex;
 
-	// A turn advance waiting for idle time (see QueueTurnAdvance).
-	private bool _advanceQueued;
-
-	// TurnEvents that must finish before the current turn's resolution completes.
-	private readonly List<TurnEvent> _pendingTurnEvents = new List<TurnEvent>();
-
-	// The combatants taking turns, in rotation order, and the slot acting now.
-	private readonly List<Combatant> _combatants = new List<Combatant>();
-	private int _activeIndex = -1;
-	private PlayerCombatant _playerCombatant;
-	private EnemyCombatant _enemyCombatant;
 
 	// Guards against queueing the scene reload twice.
 	private bool _restartRequested = false;
@@ -303,230 +242,71 @@ public partial class GameManager : Node
 	public override void _Ready()
 	{
 		Instance = this;
-		
-		// 1. Camera offset: where the camera sits relative to what it is looking
-		// at. Taken as the authored camera position measured from the seat the
-		// match opens on, so the opening view is the one the scene was framed
-		// with whatever the map says about where that seat is.
-		if (MainCamera != null)
+
+		// The scene's UI layer, for the parts that draw into it.
+		UiLayer = GetNodeOrNull<CanvasLayer>("../UI");
+
+		// The match is built out of parts, each owning one job (docs/parity M0.6).
+		// GameManager stays the entry point and the facade call sites already use,
+		// and this is where they are assembled and wired.
+		//
+		// They are created here rather than authored as children in
+		// main_scene.tscn because their settings still live on this node's exports,
+		// which is what the scene overrides; the scene grows the explicit nodes
+		// when M8 takes the HUD.
+		// The container everything a match spawns is parented under. It exists before
+		// the world is built: the pools are spawned into it.
+		StructureContainer = new Node3D { Name = "Structures" };
+		AddChild(StructureContainer);
+
+		World = new MatchWorld { Name = "MatchWorld" };
+		AddChild(World);
+		World.Build(Map, MainCamera);
+
+		Camera = new MatchCamera
 		{
-			_cameraOffset = MainCamera.GlobalPosition - PlayerStartPosition;
-		}
+			Name = "MatchCamera",
+			Camera = MainCamera,
+			UiLayer = UiLayer,
+			World = World,
+		};
+		AddChild(Camera);
+		Camera.Build();
+
+		Turns = new TurnController { Name = "TurnController" };
+		AddChild(Turns);
+		Turns.TurnStarted += OnTurnStarted;
+		Turns.MatchEnded += OnMatchEnded;
 
 		CreateAimIndicator();
-		CreateMinimap();
+		Setup = new MatchSetup
+		{
+			Name = "MatchSetup",
+			EnemyThinkTime = EnemyThinkTime,
+			EnemyAimSpreadDegrees = EnemyAimSpreadDegrees,
+			EnemyMinPower = EnemyMinPower,
+			EnemyMaxPower = EnemyMaxPower,
+		};
+		AddChild(Setup);
 
-		// The match's content (the roster and the rules) before anything reads a
-		// unit or a number off it: the HUD's unit strip, the starting structures
-		// and every launch all come from here.
-		ResolveContent();
-		ResolveRandomness();
 		if (PowerBar != null) PowerBar.Visible = false;
 		if (DefeatLabel != null) DefeatLabel.Visible = false;
 		if (VictoryLabel != null) VictoryLabel.Visible = false;
 		if (RestartLabel != null) RestartLabel.Visible = false;
 		UpdateTurnLabel();
 
-		// Track whether the OS cursor is inside the game window so edge
-		// panning never triggers from a stale position after it leaves.
-		Window window = GetWindow();
-		window.MouseEntered += () => _mouseInsideWindow = true;
-		window.MouseExited += () => _mouseInsideWindow = false;
-		window.SizeChanged += UpdateMinimapLayout; // Keep the minimap sized to the window.
+		// Build the match: the content, the seed and one chain per seat.
+		Setup.Build(Catalog, Rules, MatchSeed, World, StructureContainer);
 
-		// Build the match and hand the first turn to the first combatant.
-		StructureContainer = new Node3D { Name = "Structures" };
-		AddChild(StructureContainer);
-		CreateCombatants();
-
-		// After StructureContainer: the pool field parents itself under the spawn
-		// container, like everything else a match spawns.
-		CreatePools();
-
-		// The first turn starts once the whole scene has finished setting up: the
-		// starting node's _Ready (which builds its highlight ring and health bar)
-		// has not run yet at this point, so it could not be selected.
-		GetTree().CreateTimer(0.0f).Timeout += StartFirstTurn;
-	}
-
-	// ------------------------------------------------------------------
-	// Combatants
-	// ------------------------------------------------------------------
-
-	/// <summary>
-	/// Builds the match: the player's chain (the Structure already placed in the
-	/// scene) plus one enemy chain spawned <see cref="EnemyStartScreensRight"/>
-	/// screens to the right of it.
-	///
-	/// This is the single place opponents are declared. Adding a second enemy —
-	/// or a totally different kind of combatant, since the rotation only ever
-	/// talks to <see cref="Combatant"/> — means creating it here and adding it
-	/// to _combatants, on a team other than the player's.
-	/// </summary>
-	private void CreateCombatants()
-	{
-		// The structure every chain starts from, taken from the roster rather
-		// than named in code. It is the Hub today; docs/parity M0.4 moves the
-		// starting *units* onto the map's start positions, and M6 lets the setup
-		// screen choose them.
-		UnitDefinition startingUnit = Catalog?.Find("hub");
-		if (startingUnit == null)
-		{
-			GD.PushWarning("GameManager: the catalog has no 'hub' unit — the starting chains will spawn without a definition.");
-		}
-
-		// --- Player (team 0) ---
-		_playerCombatant = new PlayerCombatant
-		{
-			Name = "PlayerCombatant",
-			DisplayName = "You",
-			Seat = _combatants.Count,
-			Team = 0,
-			MinimapColor = MinimapStructureColor,
-			RootUnit = startingUnit,
-		};
-		AddChild(_playerCombatant);
-		_combatants.Add(_playerCombatant);
-
-		// Both chains start where the *map* says, seat 0 for the human and seat 1
-		// for the AI (docs/parity M0.4). Nothing is authored in the scene any
-		// more: a start position is map data, so a second map is a second file
-		// rather than a moved node, and the distance between the two sides stops
-		// depending on the window's aspect ratio.
-		Structure playerRoot = _playerCombatant.SpawnRoot(SeatPosition(0));
-
-		// --- Enemy (team 1) ---
-		_enemyCombatant = new EnemyCombatant
-		{
-			Name = "EnemyCombatant",
-			DisplayName = "Enemy",
-			Seat = _combatants.Count,
-			Team = 1,
-			MinimapColor = MinimapEnemyStructureColor,
-			RootUnit = startingUnit,
-			ThinkTime = EnemyThinkTime,
-			AimSpreadDegrees = EnemyAimSpreadDegrees,
-			MinPowerPercent = EnemyMinPower,
-			MaxPowerPercent = EnemyMaxPower,
-		};
-		AddChild(_enemyCombatant);
-		_combatants.Add(_enemyCombatant);
-		Structure enemyRoot = _enemyCombatant.SpawnRoot(SeatPosition(1));
-
-		GD.Print($"[Match] {_combatants.Count} combatants ready: seat 0 at {playerRoot?.GlobalPosition}, "
-			+ $"seat 1 at {enemyRoot?.GlobalPosition}.");
-	}
-
-	/// <summary>
-	/// Where a seat of this match begins. The map owns these (docs/parity M0.4);
-	/// without one both seats fall back to the origin, which is visibly broken
-	/// and says so through <see cref="ResolveContent"/> rather than silently
-	/// inventing a layout.
-	/// </summary>
-	private Vector3 SeatPosition(int seat)
-	{
-		return Map != null ? Map.StartPosition(seat) : Vector3.Zero;
-	}
-
-	/// <summary>Where the human's chain begins: the seat the opening view is framed on.</summary>
-	private Vector3 PlayerStartPosition => SeatPosition(0);
-
-	// ------------------------------------------------------------------
-	// Pools
-	// ------------------------------------------------------------------
-
-	/// <summary>
-	/// Lays the map's purple pools over its ground. Nothing in the game reacts to
-	/// them yet — they are a decorative field with a query API for the collision
-	/// checks that will come later (see <see cref="Pools"/>).
-	///
-	/// The map scatters them over its own bounds (docs/parity M0.4); before that
-	/// they were scattered over whatever region the minimap happened to show, on
-	/// a ground plane with no bounds at all.
-	/// </summary>
-	private void CreatePools()
-	{
-		Pools = Map?.CreatePoolField(this);
-		if (Pools == null) return;
-
-		// Pools are drawn on a layer of their own so the minimap camera can skip
-		// them and draw flat, steady-coloured markers instead (see CreateMinimap).
-		// The main camera has to be told to draw that layer.
-		if (MainCamera != null)
-		{
-			MainCamera.CullMask |= PurplePool.WorldRenderLayer;
-		}
-	}
-
-	// ------------------------------------------------------------------
-	// Content: the roster and the rules
-	// ------------------------------------------------------------------
-
-	/// <summary>
-	/// Loads the match's content and builds the HUD from it: the unit catalog
-	/// (docs/parity §M0.1) and the match rules (§M0.2, §7).
-	///
-	/// Both are resources authored outside the code. The fallbacks here exist so
-	/// the project still runs with no assets at all — the rules fall back to
-	/// their code defaults, and a missing catalog is reported loudly rather than
-	/// papered over with a hardcoded roster, because a roster in code is exactly
-	/// what this milestone removes (§2).
-	/// </summary>
-	private void ResolveContent()
-	{
-		if (Catalog == null)
-		{
-			GD.PushError("GameManager: no UnitCatalog assigned — there is no roster to build or launch from this match.");
-		}
-		else
-		{
-			Catalog.Validate();
-			GD.Print($"[Match] Unit catalog: {Catalog.Count} unit(s) — {Catalog.DescribeIds()}.");
-		}
-
-		if (Rules == null)
-		{
-			GD.PushWarning("GameManager: no MatchRules assigned — using the code's fallback rules.");
-			Rules = new MatchRules();
-		}
-		Rules.Validate();
-
-		if (Map == null)
-		{
-			GD.PushError($"GameManager: no MapDefinition assigned — the match has no bounds and both sides start at the origin. "
-				+ $"The minimap falls back to a {FallbackWorldExtent}-unit square.");
-		}
-		else
-		{
-			Map.Validate();
-			GD.Print($"[Match] Map: {Map.Describe()}.");
-		}
-
+		// The HUD is built from the roster the setup resolved.
 		BuildUnitIcons();
 		_currentUnitIndex = 0;
 		UpdateUnitSelector();
-	}
 
-	/// <summary>
-	/// Settles the seed the match runs on and builds the two things that depend on
-	/// it: the match's own random generator, and the command log (which records the
-	/// seed so a replay knows what to set). A seed of zero means "pick one", and the
-	/// pick is printed — a match nobody can reproduce is a match nobody can test.
-	/// </summary>
-	private void ResolveRandomness()
-	{
-		Seed = MatchSeed != 0 ? MatchSeed : (int)(GD.Randi() & 0x7fffffff);
-		if (Seed == 0) Seed = 1;
-
-		Random = new RandomNumberGenerator { Seed = (ulong)Seed };
-
-		Commands = new CommandLog
-		{
-			Seed = Seed,
-			MapId = Map?.Id ?? "",
-		};
-
-		GD.Print($"[Match] Seed {Seed} on map '{Commands.MapId}'{(MatchSeed != 0 ? "" : " (chosen)")}.");
+		// The first turn starts once the whole scene has finished setting up: the
+		// starting structures' _Ready (which builds their highlight rings and
+		// health bars) has not run yet at this point, so they could not be selected.
+		GetTree().CreateTimer(0.0f).Timeout += () => Turns.Start(Setup.Combatants);
 	}
 
 	/// <summary>
@@ -632,7 +412,7 @@ public partial class GameManager : Node
 		if (structure == null || !IsInstanceValid(structure) || structure.IsDestroyed) return;
 		// Only the player's own chain is controllable — enemy structures are
 		// never selectable, so a click can't hijack the opponent's chain.
-		if (structure.OwnerChain != _playerCombatant) return;
+		if (structure.OwnerChain != HumanCombatant) return;
 
 		// The previous selection may have been destroyed; only touch it
 		// while it is still a valid instance.
@@ -645,7 +425,7 @@ public partial class GameManager : Node
 
 		// Show indicator and move camera
 		_aimIndicator.Visible = true;
-		CenterCameraOn(structure.GlobalPosition);
+		Camera?.CenterOn(structure.GlobalPosition);
 
 		// Cancel charging if we switch nodes
 		_isCharging = false;
@@ -665,11 +445,10 @@ public partial class GameManager : Node
 
 	public override void _Process(double delta)
 	{
-		HandleCameraPanning((float)delta);
-		UpdateMinimapViewIndicator();
-		UpdateMinimapPoolMarkers();
-		UpdateMinimapMarkers();
-		UpdateMinimapLines();
+		// The camera's own per-frame work: panning the player asked for, and the
+		// minimap reconciled against the match's structures (docs/parity M0.6).
+		Camera?.Pan((float)delta);
+		Camera?.Refresh(_structures, SelectedStructure);
 
 		// Safety net: never keep control pointed at a destroyed node.
 		// If the selected node dies, control reverts to the highest
@@ -797,133 +576,24 @@ public partial class GameManager : Node
 	}
 
 	// ------------------------------------------------------------------
-	// Turn system
+	// Turn flow: the match's side of it
 	// ------------------------------------------------------------------
 
 	/// <summary>
-	/// Registers an event that must resolve before the current turn ends.
-	/// Registering the first event commits the turn and takes control away
-	/// from the player; control returns when the last pending event resolves.
+	/// The rotation has given a seat its turn (docs/parity M0.6). Who acts is
+	/// decided here and nowhere else: a replayed command log, the human's input, or
+	/// the combatant's own brain. The turn controller deliberately has no opinion —
+	/// it announces the turn and waits for the next event.
 	/// </summary>
-	public void RegisterTurnEvent(TurnEvent evt)
+	private void OnTurnStarted(Combatant combatant)
 	{
-		if (evt == null || evt.IsResolved) return;
-
-		if (!IsResolvingTurn)
-		{
-			// Committing the turn: lock player control immediately.
-			IsResolvingTurn = true;
-			IsPlayerTurn = false;
-
-			// Cancel any in-flight charging state.
-			_isCharging = false;
-			_currentPowerPercent = 0f;
-			if (PowerBar != null) PowerBar.Visible = false;
-			if (_aimIndicator != null) _aimIndicator.Visible = false;
-
-			GD.Print($"[Turn {CurrentTurn}] Turn committed — control locked.");
-		}
-
-		_pendingTurnEvents.Add(evt);
-		evt.Resolved += () => OnTurnEventResolved(evt);
-		GD.Print($"[Turn {CurrentTurn}] Event started: {evt.Description}");
-	}
-
-	private void OnTurnEventResolved(TurnEvent evt)
-	{
-		if (!_pendingTurnEvents.Remove(evt)) return;
-		GD.Print($"[Turn {CurrentTurn}] Event resolved: {evt.Description}");
-
-		if (_pendingTurnEvents.Count == 0 && IsResolvingTurn)
-		{
-			CompleteTurn();
-		}
-	}
-
-	/// <summary>
-	/// Every pending event has finished: the acting combatant's turn is over.
-	/// The match is checked for a winner, and otherwise the turn passes to the
-	/// next combatant that can still act.
-	/// </summary>
-	private void CompleteTurn()
-	{
-		IsResolvingTurn = false;
-		ActiveCombatant?.EndTurn();
-
-		GD.Print($"[Turn {CurrentTurn}] Resolution complete.");
-
-		// A chain whose root was destroyed cascades through every child, so a
-		// combatant with no root left loses the match for its team.
-		if (EvaluateGameOver()) return;
-
-		QueueTurnAdvance();
-	}
-
-	/// <summary>
-	/// Advances the rotation at idle time rather than on the spot.
-	///
-	/// A turn can end from inside a node's <c>_ExitTree</c>: a structure's
-	/// destruction event resolves there, and it is often the last event of the turn.
-	/// The scene tree is locked while nodes are being removed, so anything the next
-	/// turn spawns — an AI's shot, a replayed command, anything that adds a child —
-	/// fails with "parent node is busy setting up children", leaving a turn whose
-	/// event can never resolve. Deferring costs one frame and makes the rotation safe
-	/// from wherever it was triggered.
-	/// </summary>
-	private void QueueTurnAdvance()
-	{
-		if (_advanceQueued) return;
-
-		_advanceQueued = true;
-		Callable.From(AdvanceTurnDeferred).CallDeferred();
-	}
-
-	private void AdvanceTurnDeferred()
-	{
-		_advanceQueued = false;
-		if (IsGameOver) return;
-		AdvanceTurn();
-	}
-
-	/// <summary>
-	/// Ends the active turn for a combatant that spent its whole turn without
-	/// registering a single TurnEvent (for example a shot that could not be
-	/// launched). Without this the rotation would wait forever for events that
-	/// are never coming. Does nothing while events are still resolving.
-	/// </summary>
-	public void EndIdleTurn()
-	{
-		if (IsResolvingTurn || IsGameOver) return;
-		CompleteTurn();
-	}
-
-	/// <summary>
-	/// Hands the first turn of the match to the first combatant in the rotation.
-	/// </summary>
-	private void StartFirstTurn()
-	{
-		if (_combatants.Count == 0) return;
-
-		_activeIndex = 0;
-		CurrentTurn = 1;
-		StartTurn(_combatants[_activeIndex]);
-	}
-
-	/// <summary>
-	/// Begins <paramref name="combatant"/>'s turn: a player-controlled combatant
-	/// gets control back (on its last selected node when that node survived, or
-	/// on the top of its chain otherwise), an AI combatant starts acting.
-	/// </summary>
-	private void StartTurn(Combatant combatant)
-	{
-		ActiveCombatant = combatant;
 		if (combatant == null) return;
 
 		if (IsReplaying)
 		{
 			// Neither input nor the AI: the log acts for every seat in turn
 			// (docs/parity M0.5).
-			IsPlayerTurn = false;
+			Turns.IsPlayerTurn = false;
 			HideAimIndicator();
 			FollowActingCombatant(combatant);
 			PlayNextReplayCommand(combatant);
@@ -933,24 +603,24 @@ public partial class GameManager : Node
 
 		if (combatant.IsPlayerControlled)
 		{
-			IsPlayerTurn = true;
+			Turns.IsPlayerTurn = true;
 
-			// Note: a destroyed node may still be a "valid" instance at this
-			// point (QueueFree removes it at the end of the frame), so check
-			// the IsDestroyed flag rather than IsInstanceValid alone.
+			// Note: a destroyed structure may still be a "valid" instance at this
+			// point (QueueFree removes it at the end of the frame), so check the
+			// IsDestroyed flag rather than IsInstanceValid alone.
 			bool selectionSurvived = SelectedStructure != null
 				&& IsInstanceValid(SelectedStructure)
 				&& !SelectedStructure.IsDestroyed
 				&& SelectedStructure.OwnerChain == combatant;
 
-			Structure target = selectionSurvived ? SelectedStructure : _playerCombatant.FindRootStructure();
+			Structure target = selectionSurvived ? SelectedStructure : HumanChain?.FindRootStructure();
 			SelectStructure(target);
 			GD.Print($"[Turn {CurrentTurn}] {combatant.DisplayName}: move.");
 		}
 		else
 		{
 			// No input for this combatant — it acts on its own from here.
-			IsPlayerTurn = false;
+			Turns.IsPlayerTurn = false;
 			HideAimIndicator();
 			FollowActingCombatant(combatant);
 
@@ -962,88 +632,23 @@ public partial class GameManager : Node
 	}
 
 	/// <summary>
-	/// Points the camera at whoever is acting, when that is wanted. An AI (or a
-	/// replayed) combatant can be anywhere on the map; the player's own turn
-	/// centers the camera back on their selection through SelectStructure().
+	/// The turn committed — nothing the player had in progress survives it. The
+	/// turn controller locks control; this is the player's half of that.
 	/// </summary>
-	private void FollowActingCombatant(Combatant combatant)
+	private void OnTurnCommitted()
 	{
-		if (!CenterCameraOnActingCombatant) return;
-		if (combatant is not NodeChainCombatant chain) return;
-		if (chain.ActionStructure == null) return;
-
-		CenterCameraOn(chain.ActionStructure.GlobalPosition);
+		_isCharging = false;
+		_currentPowerPercent = 0f;
+		if (PowerBar != null) PowerBar.Visible = false;
+		if (_aimIndicator != null) _aimIndicator.Visible = false;
 	}
 
 	/// <summary>
-	/// Passes the turn to the next combatant that can still act, skipping
-	/// defeated ones, and counts a round each time the rotation wraps around.
+	/// The match is over: show the outcome and stop taking input except the
+	/// restart. The state change itself belongs to the turn controller.
 	/// </summary>
-	private void AdvanceTurn()
+	private void OnMatchEnded(bool playerWon)
 	{
-		int count = _combatants.Count;
-		if (count == 0) return;
-
-		bool roundCounted = false;
-		for (int step = 1; step <= count; step++)
-		{
-			int next = (_activeIndex + step) % count;
-
-			// Wrapped past the end of the rotation: one full round has passed.
-			if (next <= _activeIndex && !roundCounted)
-			{
-				CurrentTurn++;
-				roundCounted = true;
-			}
-
-			if (_combatants[next].IsDefeated) continue;
-
-			_activeIndex = next;
-			StartTurn(_combatants[next]);
-			return;
-		}
-
-		// Every combatant is defeated; EvaluateGameOver() should have ended the
-		// match before this could happen.
-	}
-
-	/// <summary>
-	/// Ends the match once a whole team has no combatant left that can act:
-	/// defeat when the player's team is gone, victory when every enemy is
-	/// (destroying the enemy chain's root takes its whole chain with it).
-	/// Returns true when the match ended.
-	/// </summary>
-	private bool EvaluateGameOver()
-	{
-		if (_playerCombatant == null || _combatants.Count == 0) return false;
-
-		int playerTeam = _playerCombatant.Team;
-		bool playerAlive = false;
-		bool enemiesAlive = false;
-
-		foreach (Combatant combatant in _combatants)
-		{
-			if (combatant.IsDefeated) continue;
-			if (combatant.Team == playerTeam) playerAlive = true;
-			else enemiesAlive = true;
-		}
-
-		if (playerAlive && enemiesAlive) return false;
-
-		EndGame(playerAlive && !enemiesAlive);
-		return true;
-	}
-
-	/// <summary>
-	/// Shows the outcome overlay and stops the rotation. Any key or click from
-	/// here on restarts the match (see <see cref="_UnhandledInput"/>).
-	/// </summary>
-	/// <param name="playerWon">True for the victory screen, false for defeat.</param>
-	private void EndGame(bool playerWon)
-	{
-		IsGameOver = true;
-		IsPlayerTurn = false;
-		IsResolvingTurn = false;
 		SelectedStructure = null;
 		HideAimIndicator();
 		if (PowerBar != null) PowerBar.Visible = false;
@@ -1057,10 +662,47 @@ public partial class GameManager : Node
 		else
 		{
 			if (DefeatLabel != null) DefeatLabel.Visible = true;
-			GD.Print("DEFEAT: no nodes remain in the chain.");
+			GD.Print("DEFEAT: no structures remain in the chain.");
 		}
 
 		UpdateTurnLabel();
+	}
+
+	/// <summary>The human's combatant as a chain, for root lookups.</summary>
+	private NodeChainCombatant HumanChain => HumanCombatant as NodeChainCombatant;
+
+	/// <summary>
+	/// Registers an event that must resolve before the current turn ends, and
+	/// commits the turn when it is the first (docs/parity M0.5: a turn is not over
+	/// until its shot has landed).
+	/// </summary>
+	public void RegisterTurnEvent(TurnEvent evt)
+	{
+		Turns?.RegisterEvent(evt);
+	}
+
+	/// <summary>
+	/// Ends the active turn for a combatant that spent it without registering a
+	/// single event (a shot that could not be launched). Without this the rotation
+	/// would wait forever for events that are never coming.
+	/// </summary>
+	public void EndIdleTurn()
+	{
+		Turns?.EndIdleTurn();
+	}
+
+	/// <summary>
+	/// Points the camera at whoever is acting, when that is wanted. An AI (or a
+	/// replayed) combatant can be anywhere on the map; the player's own turn
+	/// centers the camera back on their selection through SelectStructure().
+	/// </summary>
+	private void FollowActingCombatant(Combatant combatant)
+	{
+		if (!CenterCameraOnActingCombatant) return;
+		if (combatant is not NodeChainCombatant chain) return;
+		if (chain.ActionStructure == null) return;
+
+		Camera?.CenterOn(chain.ActionStructure.GlobalPosition);
 	}
 
 	/// <summary>
@@ -1087,10 +729,10 @@ public partial class GameManager : Node
 	/// </summary>
 	private void RevertControlToHighestNode()
 	{
-		Structure highest = _playerCombatant?.FindRootStructure();
+		Structure highest = HumanChain?.FindRootStructure();
 		if (highest == null)
 		{
-			EndGame(false);
+			Turns?.EndMatch(false);
 			return;
 		}
 		SelectStructure(highest);
@@ -1219,7 +861,7 @@ public partial class GameManager : Node
 		{
 			GD.Print("[Replay] the log is spent — the match carries on by itself from here.");
 			_replay = null;
-			StartTurn(combatant);
+			OnTurnStarted(combatant);
 			return;
 		}
 
@@ -1229,7 +871,7 @@ public partial class GameManager : Node
 			GD.PushError($"[Replay] the log has {command.Describe()} next, but seat {combatant.Seat} ('{combatant.DisplayName}') "
 				+ "is the one acting — the log does not fit this match. Stopping the replay.");
 			_replay = null;
-			EndIdleTurn();
+			Turns?.EndIdleTurn();
 			return;
 		}
 
@@ -1239,7 +881,7 @@ public partial class GameManager : Node
 
 		// A command that could not be applied registers no TurnEvent, and the
 		// rotation would wait for one forever.
-		if (!IsResolvingTurn) EndIdleTurn();
+		if (!IsResolvingTurn) Turns?.EndIdleTurn();
 	}
 
 	/// <summary>
@@ -1283,6 +925,9 @@ public partial class GameManager : Node
 				.Append(Round(position.Z));
 		}
 
+		// Printed, not just hashed: when a hash changes, this is what changed.
+		GD.Print($"[State] {text}");
+
 		return Fnv1a64(text.ToString());
 	}
 
@@ -1323,14 +968,6 @@ public partial class GameManager : Node
 		_structures.Remove(structure);
 	}
 
-	/// <summary>Minimap color for a node: the selection stands out, otherwise nodes use their owner's color.</summary>
-	private Color GetNodeMinimapColor(Structure node)
-	{
-		if (node == SelectedStructure) return MinimapSelectedStructureColor;
-		if (node.OwnerChain != null && IsInstanceValid(node.OwnerChain)) return node.OwnerChain.MinimapColor;
-		return MinimapStructureColor;
-	}
-
 	/// <summary>Shows the round number and whose move it is.</summary>
 	private void UpdateTurnLabel()
 	{
@@ -1352,202 +989,9 @@ public partial class GameManager : Node
 		TurnLabel.Text = $"Turn {CurrentTurn} — {whose}";
 	}
 
-	private void CenterCameraOn(Vector3 targetPosition)
-	{
-		if (MainCamera == null) return;
-
-		// Stop any in-flight panning/centering tween first.
-		if (_cameraTween != null && _cameraTween.IsValid())
-		{
-			_cameraTween.Kill();
-		}
-
-		// Calculate destination based on ground position to keep height consistent
-		Vector3 groundLevel = new Vector3(targetPosition.X, 0, targetPosition.Z);
-		Vector3 destination = groundLevel + _cameraOffset;
-
-		_cameraTween = GetTree().CreateTween();
-		_cameraTween.SetTrans(Tween.TransitionType.Expo); 
-		_cameraTween.SetEase(Tween.EaseType.Out);
-		
-		_cameraTween.TweenProperty(MainCamera, "global_position", destination, CameraSmoothTime);
-		
-		// Optional: Ensure camera doesn't accidentally rotate
-		_cameraTween.Parallel().TweenProperty(MainCamera, "global_rotation", MainCamera.GlobalRotation, CameraSmoothTime);
-	}
-
 	// ------------------------------------------------------------------
 	// Camera: minimap & screen-edge panning
 	// ------------------------------------------------------------------
-
-	/// <summary>
-	/// Builds the RTS-style minimap: a SubViewport with a top-down camera
-	/// rendered into a TextureRect in the bottom-right corner, plus a
-	/// translucent rectangle showing the main camera's current view.
-	/// Clicking the minimap centers the main camera on that spot.
-	///
-	/// The minimap currently shows a fixed-size subset of the (effectively
-	/// infinite) ground plane — see GetMinimapWorldRect() for the single
-	/// seam to swap in a real map-sized region later.
-	/// </summary>
-	private void CreateMinimap()
-	{
-		if (MainCamera == null) return;
-		var uiLayer = GetNodeOrNull<CanvasLayer>("../UI");
-		if (uiLayer == null) return;
-
-
-		// 1. Off-screen SubViewport that re-renders the shared 3D world top-down.
-		// Its resolution is matched to the on-screen widget by UpdateMinimapLayout().
-		_minimapViewport = new SubViewport
-		{
-			Name = "MinimapViewport",
-			Size = new Vector2I(256, 256),
-			TransparentBg = false,
-			RenderTargetUpdateMode = SubViewport.UpdateMode.Always,
-			GuiDisableInput = true,
-			PhysicsObjectPicking = false,
-			OwnWorld3D = false, // Render the same world the player sees.
-		};
-
-		_minimapCamera = new Camera3D
-		{
-			Name = "MinimapCamera",
-			Projection = Camera3D.ProjectionType.Orthogonal,
-			Size = MinimapExtent,
-			Position = new Vector3(GetMinimapWorldRect().GetCenter().X, 2000, GetMinimapWorldRect().GetCenter().Y),
-			RotationDegrees = new Vector3(-90, 0, 0),
-			Near = 1.0f,
-			Far = 4000.0f,
-		};
-		_minimapViewport.AddChild(_minimapCamera);
-		_minimapCamera.Current = true; // Make it the viewport's active camera.
-
-		// The pools' 3D geometry is left out of the minimap: their pulse would be
-		// noise on a map, and a 6-unit pool is barely a pixel here anyway. Flat
-		// markers in a steady colour are drawn instead (UpdateMinimapPoolMarkers).
-		_minimapCamera.CullMask &= ~PurplePool.WorldRenderLayer;
-		AddChild(_minimapViewport);
-
-		// 2. A thin frame behind the minimap so it stands out on the ground.
-		_minimapFrame = new ColorRect
-		{
-			Name = "MinimapFrame",
-			Color = new Color(0, 0, 0, 0.6f),
-			MouseFilter = Control.MouseFilterEnum.Ignore,
-		};
-		_minimapFrame.SetAnchorsPreset(Control.LayoutPreset.BottomRight);
-		uiLayer.AddChild(_minimapFrame);
-
-		// 3. The on-screen minimap widget (bottom-right corner).
-		_minimapRect = new TextureRect
-		{
-			Name = "Minimap",
-			Texture = _minimapViewport.GetTexture(),
-			ClipContents = true,
-			MouseFilter = Control.MouseFilterEnum.Stop,
-		};
-		_minimapRect.SetAnchorsPreset(Control.LayoutPreset.BottomRight);
-		uiLayer.AddChild(_minimapRect);
-
-		// 4. Translucent rectangle showing where the main camera is looking.
-		_minimapViewIndicator = new ColorRect
-		{
-			Name = "ViewIndicator",
-			Color = MinimapViewRectColor,
-			MouseFilter = Control.MouseFilterEnum.Ignore,
-		};
-		_minimapRect.AddChild(_minimapViewIndicator);
-
-		// 5. Layer for the pool markers, added before the layers below so pools sit
-		// underneath the cables and the node dots: a node standing in a pool has to
-		// stay readable.
-		_minimapPoolLayer = new Node2D { Name = "PoolMarkers" };
-		_minimapRect.AddChild(_minimapPoolLayer);
-
-		// 6. Layer for parent->child connection lines. Added before any
-		// marker dots exist, so lines always draw underneath the dots.
-		_minimapLineLayer = new Node2D { Name = "ConnectionLines" };
-		_minimapRect.AddChild(_minimapLineLayer);
-
-		// 7. Clicking the minimap moves the camera to that spot.
-		_minimapRect.GuiInput += OnMinimapGuiInput;
-
-		// Size the widget (and viewport) for the current window.
-		UpdateMinimapLayout();
-	}
-
-	/// <summary>
-	/// Sizes the minimap to the game window: its side is
-	/// MinimapScreenFraction of the window's shorter side. The SubViewport
-	/// resolution is matched to the widget so the render stays crisp, and
-	/// the frame hugs the widget. Runs on window resize; every minimap
-	/// mapping reads _minimapRect.Size, so this is the only place that
-	/// needs to know the pixel layout.
-	/// </summary>
-	private void UpdateMinimapLayout()
-	{
-		if (_minimapRect == null || _minimapViewport == null || _minimapFrame == null) return;
-
-		Vector2 viewportSize = GetViewport().GetVisibleRect().Size;
-		float side = Mathf.Max(1f, Mathf.Min(viewportSize.X, viewportSize.Y) * MinimapScreenFraction);
-		Vector2I pixelSize = new Vector2I(Mathf.RoundToInt(side), Mathf.RoundToInt(side));
-		if (pixelSize == _lastMinimapPixelSize) return;
-		_lastMinimapPixelSize = pixelSize;
-
-		_minimapViewport.Size = pixelSize;
-
-		_minimapRect.OffsetLeft = -pixelSize.X - 8;
-		_minimapRect.OffsetTop = -pixelSize.Y - 8;
-		_minimapRect.OffsetRight = -8;
-		_minimapRect.OffsetBottom = -8;
-
-		_minimapFrame.OffsetLeft = -pixelSize.X - 10;
-		_minimapFrame.OffsetTop = -pixelSize.Y - 10;
-		_minimapFrame.OffsetRight = -6;
-		_minimapFrame.OffsetBottom = -6;
-	}
-
-	private void OnMinimapGuiInput(InputEvent @event)
-	{
-		if (_minimapRect == null) return;
-		if (@event is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
-		{
-			Vector2 local = _minimapRect.GetLocalMousePosition();
-			Vector2 size = _minimapRect.Size;
-			if (size.X <= 0f || size.Y <= 0f) return;
-
-			// Map the click to a world position on the ground plane.
-			float nx = Mathf.Clamp(local.X / size.X, 0f, 1f);
-			float ny = Mathf.Clamp(local.Y / size.Y, 0f, 1f);
-			Rect2 worldRect = GetMinimapWorldRect();
-			Vector3 target = new Vector3(
-				worldRect.Position.X + nx * worldRect.Size.X,
-				0f,
-				worldRect.Position.Y + ny * worldRect.Size.Y);
-			CenterCameraOn(target);
-		}
-	}
-
-	/// <summary>
-	/// The world-space XZ rectangle the minimap displays.
-	///
-	/// Currently a fixed-size subset of the (effectively infinite) ground
-	/// plane: MinimapWorldSize wide/tall centered on MinimapCenter. When a
-	/// real map with defined bounds exists, replace the body of this method
-	/// with a rect derived from the map size (e.g. from PanBoundsMin/Max) so
-	/// the minimap automatically scales to the whole map. The top-down camera
-	/// size in CreateMinimap() must then follow the same rect.
-	/// </summary>
-	private Rect2 GetMinimapWorldRect()
-	{
-		return Map != null
-			? Map.Bounds
-			: new Rect2(Vector2.Zero - (Vector2.One * (FallbackWorldExtent * 0.5f)), Vector2.One * FallbackWorldExtent);
-	}
-
-	/// <summary>Side of the square region the minimap shows: the map's extent.</summary>
-	private float MinimapExtent => Map != null ? Mathf.Max(Map.Extent, 1f) : FallbackWorldExtent;
 
 	/// <summary>
 	/// The region the minimap shows when the match has no map resource at all.
@@ -1557,275 +1001,4 @@ public partial class GameManager : Node
 	/// </summary>
 	private const float FallbackWorldExtent = 100f;
 
-	/// <summary>Converts a world-space XZ position to minimap pixel coordinates.</summary>
-	private Vector2 WorldToMinimap(Vector2 worldXZ)
-	{
-		if (_minimapRect == null) return Vector2.Zero;
-		Rect2 worldRect = GetMinimapWorldRect();
-		Vector2 normalized = new Vector2(
-			(worldXZ.X - worldRect.Position.X) / worldRect.Size.X,
-			(worldXZ.Y - worldRect.Position.Y) / worldRect.Size.Y);
-		return new Vector2(normalized.X * _minimapRect.Size.X, normalized.Y * _minimapRect.Size.Y);
-	}
-
-	/// <summary>
-	/// Positions and sizes the minimap's view indicator to match the main
-	/// camera's ground footprint.
-	/// </summary>
-	private void UpdateMinimapViewIndicator()
-	{
-		if (_minimapRect == null || _minimapViewIndicator == null || MainCamera == null) return;
-
-		// Ray from the main camera through the screen center down to the ground.
-		Vector3 camPos = MainCamera.GlobalPosition;
-		Vector3 forward = -MainCamera.GlobalTransform.Basis.Z;
-		if (Mathf.Abs(forward.Y) < 0.001f) return;
-		float t = -camPos.Y / forward.Y;
-		if (t < 0f) return; // Camera not looking at the ground plane.
-		Vector3 groundLookAt = camPos + forward * t;
-
-		// Project the camera's screen-space footprint onto the ground plane.
-		Vector3 up = MainCamera.GlobalTransform.Basis.Y;
-		Vector3 right = MainCamera.GlobalTransform.Basis.X;
-		Vector2 upGround = new Vector2(up.X, up.Z);
-		Vector2 rightGround = new Vector2(right.X, right.Z);
-		if (upGround.LengthSquared() < 0.001f || rightGround.LengthSquared() < 0.001f) return;
-
-		float aspect = GetViewportAspect();
-		float halfHeightWorld = (MainCamera.Size * 0.5f) / upGround.Length();
-		float halfWidthWorld = (MainCamera.Size * 0.5f * aspect) / rightGround.Length();
-
-		Vector2 center = WorldToMinimap(new Vector2(groundLookAt.X, groundLookAt.Z));
-		Rect2 worldRect = GetMinimapWorldRect();
-		Vector2 halfMinimap = new Vector2(
-			halfWidthWorld / worldRect.Size.X * _minimapRect.Size.X,
-			halfHeightWorld / worldRect.Size.Y * _minimapRect.Size.Y);
-
-		_minimapViewIndicator.Position = center - halfMinimap;
-		_minimapViewIndicator.Size = halfMinimap * 2f;
-	}
-
-	private float GetViewportAspect()
-	{
-		Vector2 size = GetViewport().GetVisibleRect().Size;
-		return size.Y > 0f ? size.X / size.Y : 1f;
-	}
-
-	/// <summary>
-	/// Reconciles the minimap's structure markers: creates a dot for every live
-	/// structure (black) and highlights the selected one (yellow), and removes
-	/// markers for structures that have been destroyed. Dots are plain ColorRects
-	/// clipped to the minimap, so anything outside the shown region vanishes.
-	/// </summary>
-	private void UpdateMinimapMarkers()
-	{
-		if (_minimapRect == null) return;
-
-		foreach (Structure node in _structures)
-		{
-			if (node == null || !IsInstanceValid(node) || node.IsDestroyed) continue;
-
-			if (!_minimapMarkers.TryGetValue(node, out ColorRect marker) || !IsInstanceValid(marker))
-			{
-				marker = new ColorRect
-				{
-					Size = MinimapMarkerSize,
-					Color = MinimapStructureColor,
-					MouseFilter = Control.MouseFilterEnum.Ignore,
-				};
-				_minimapRect.AddChild(marker);
-				_minimapMarkers[node] = marker;
-			}
-
-			marker.Color = GetNodeMinimapColor(node);
-			Vector2 pos = WorldToMinimap(new Vector2(node.GlobalPosition.X, node.GlobalPosition.Z));
-			marker.Position = pos - marker.Size * 0.5f;
-		}
-
-		// Drop markers whose node has been destroyed, freed, or left the
-		// registry since last frame.
-		List<Structure> dead = null;
-		foreach (KeyValuePair<Structure, ColorRect> pair in _minimapMarkers)
-		{
-			if (!IsInstanceValid(pair.Key) || pair.Key.IsDestroyed || !_structures.Contains(pair.Key))
-			{
-				pair.Value.QueueFree();
-				if (dead == null) dead = new List<Structure>();
-				dead.Add(pair.Key);
-			}
-		}
-		if (dead != null)
-		{
-			foreach (Structure key in dead)
-			{
-				_minimapMarkers.Remove(key);
-			}
-		}
-	}
-
-	/// <summary>
-	/// Reconciles the minimap's pool markers: one flat square per pool, in
-	/// <see cref="MinimapPoolColor"/> and never pulsing.
-	///
-	/// The pools' own geometry is excluded from the minimap camera (see
-	/// CreateMinimap), so these markers are the only pools the minimap shows — a
-	/// steady version of the same purple, which is what a map wants. They are
-	/// reconciled every frame like the node markers, which is also what keeps them
-	/// right when the window (and so the minimap) is resized.
-	/// </summary>
-	private void UpdateMinimapPoolMarkers()
-	{
-		if (_minimapRect == null || _minimapPoolLayer == null || Pools == null) return;
-		IReadOnlyList<PurplePool> pools = Pools.Pools;
-		if (pools.Count == 0) return;
-
-		// World units to minimap pixels. The widget and the world rect are both
-		// square, so one factor covers X and Z.
-		float scale = _minimapRect.Size.X / Mathf.Max(0.01f, GetMinimapWorldRect().Size.X);
-
-		for (int i = 0; i < pools.Count; i++)
-		{
-			if (_minimapPoolMarkers.Count <= i)
-			{
-				var marker = new ColorRect
-				{
-					Name = $"PoolMarker{i}",
-					Color = MinimapPoolColor,
-					MouseFilter = Control.MouseFilterEnum.Ignore,
-				};
-				_minimapPoolLayer.AddChild(marker);
-				_minimapPoolMarkers.Add(marker);
-			}
-
-			ColorRect dot = _minimapPoolMarkers[i];
-			// A pool's true size on the minimap, floored so it can be seen at all.
-			float side = Mathf.Max(pools[i].Side * scale, MinimapPoolMarkerSize);
-			dot.Size = new Vector2(side, side);
-			Vector2 pos = WorldToMinimap(new Vector2(pools[i].GlobalPosition.X, pools[i].GlobalPosition.Z));
-			dot.Position = pos - dot.Size * 0.5f;
-		}
-	}
-
-	/// <summary>
-	/// Reconciles the minimap's connection lines: a plain line for every
-	/// structure with a live parent, drawn between the two dots (no
-	/// directionality). Lines live in their own layer under the markers and
-	/// are clipped to the minimap like everything else.
-	/// </summary>
-	private void UpdateMinimapLines()
-	{
-		if (_minimapLineLayer == null) return;
-
-		foreach (Structure node in _structures)
-		{
-			if (node == null || !IsInstanceValid(node) || node.IsDestroyed) continue;
-			Structure parent = node.ParentStructure;
-			if (parent == null || !IsInstanceValid(parent) || parent.IsDestroyed) continue;
-
-			if (!_minimapLines.TryGetValue(node, out Line2D line) || !IsInstanceValid(line))
-			{
-				line = new Line2D
-				{
-					Width = MinimapLineWidth,
-					DefaultColor = MinimapLineColor,
-				};
-				_minimapLineLayer.AddChild(line);
-				_minimapLines[node] = line;
-			}
-
-			line.Points = new[]
-			{
-				WorldToMinimap(new Vector2(parent.GlobalPosition.X, parent.GlobalPosition.Z)),
-				WorldToMinimap(new Vector2(node.GlobalPosition.X, node.GlobalPosition.Z)),
-			};
-		}
-
-		// Drop lines whose structure (or its parent) has died or left the chain.
-		List<Structure> dead = null;
-		foreach (KeyValuePair<Structure, Line2D> pair in _minimapLines)
-		{
-			Structure node = pair.Key;
-			Structure parent = node?.ParentStructure;
-			if (!IsInstanceValid(node) || node.IsDestroyed || !_structures.Contains(node)
-				|| parent == null || !IsInstanceValid(parent) || parent.IsDestroyed)
-			{
-				pair.Value.QueueFree();
-				if (dead == null) dead = new List<Structure>();
-				dead.Add(node);
-			}
-		}
-		if (dead != null)
-		{
-			foreach (Structure key in dead)
-			{
-				_minimapLines.Remove(key);
-			}
-		}
-	}
-
-	/// <summary>
-	/// Pans the camera when the mouse cursor is near a screen edge, in
-	/// classic RTS style. Speed ramps up the deeper the cursor sits inside
-	/// the edge margin. Never fights a centering tween — panning wins.
-	/// </summary>
-	private void HandleCameraPanning(float delta)
-	{
-		if (MainCamera == null) return;
-		// Never pan from a stale position: the cursor must actually be inside
-		// the game window and the window focused.
-		if (!_mouseInsideWindow) return;
-		if (!GetViewport().GetWindow().HasFocus()) return;
-		// Don't pan while the cursor is over UI (minimap, ammo bar, labels).
-		if (GetViewport().GuiGetHoveredControl() != null) return;
-
-		Vector2 mouse = GetViewport().GetMousePosition();
-		Vector2 viewportSize = GetViewport().GetVisibleRect().Size;
-		if (viewportSize.X <= 0f || viewportSize.Y <= 0f) return;
-
-		float margin = PanEdgeMargin;
-		Vector2 panDir = Vector2.Zero;
-		float edgeDepth = 0f;
-
-		if (mouse.X <= margin)
-		{
-			panDir.X = -1f;
-			edgeDepth = Mathf.Max(edgeDepth, Mathf.Clamp((margin - mouse.X) / margin, 0f, 1f));
-		}
-		else if (mouse.X >= viewportSize.X - margin)
-		{
-			panDir.X = 1f;
-			edgeDepth = Mathf.Max(edgeDepth, Mathf.Clamp((mouse.X - (viewportSize.X - margin)) / margin, 0f, 1f));
-		}
-
-		if (mouse.Y <= margin)
-		{
-			panDir.Y = -1f;
-			edgeDepth = Mathf.Max(edgeDepth, Mathf.Clamp((margin - mouse.Y) / margin, 0f, 1f));
-		}
-		else if (mouse.Y >= viewportSize.Y - margin)
-		{
-			panDir.Y = 1f;
-			edgeDepth = Mathf.Max(edgeDepth, Mathf.Clamp((mouse.Y - (viewportSize.Y - margin)) / margin, 0f, 1f));
-		}
-
-		if (panDir == Vector2.Zero) return;
-
-		// Take over from any in-flight centering tween.
-		if (_cameraTween != null && _cameraTween.IsValid())
-		{
-			_cameraTween.Kill();
-		}
-
-		// Convert the screen-space pan direction to a ground-plane direction.
-		Vector3 move = MainCamera.GlobalTransform.Basis.X * panDir.X
-					 + MainCamera.GlobalTransform.Basis.Y * (-panDir.Y);
-		move.Y = 0f;
-		if (move.LengthSquared() < 0.0001f) return;
-		move = move.Normalized();
-
-		Vector3 newPos = MainCamera.GlobalPosition + move * (PanSpeed * edgeDepth * delta);
-		newPos.X = Mathf.Clamp(newPos.X, Mathf.Min(PanBoundsMin.X, PanBoundsMax.X), Mathf.Max(PanBoundsMin.X, PanBoundsMax.X));
-		newPos.Z = Mathf.Clamp(newPos.Z, Mathf.Min(PanBoundsMin.Y, PanBoundsMax.Y), Mathf.Max(PanBoundsMin.Y, PanBoundsMax.Y));
-		MainCamera.GlobalPosition = newPos;
-	}
 }
