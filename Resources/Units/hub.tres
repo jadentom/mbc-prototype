@@ -12,5 +12,6 @@ Traits = 1
 Level = 7
 HitPoints = 5
 CanBeBuilt = true
+LaunchForceScale = 1.0
 Icon = ExtResource("1_wkhjl")
 ProjectileScene = ExtResource("2_84yfh")

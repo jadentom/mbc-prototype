@@ -8,6 +8,7 @@ using MbcPrototype.Enemies;
 using MbcPrototype.Presentation;
 using MbcPrototype.Rules;
 using MbcPrototype.Simulation;
+using MbcPrototype.Testing;
 using MbcPrototype.TurnSystem;
 using MbcPrototype.Units;
 using MbcPrototype.World;
@@ -22,26 +23,16 @@ public partial class GameManager : Node
 	[Export] public Camera3D MainCamera;
 	[Export] public ProgressBar PowerBar;
 
-	[ExportGroup("Aiming Settings")]
-	[Export] public float RotationSpeed = 3.0f;
-	[Export] public float UpwardBias = 5f;
-
-	[ExportGroup("Power Settings")]
-	[Export] public float MinLaunchForce = 4.0f;
-	[Export] public float MaxLaunchForce = 20.0f;
-	[Export] public float ChargeSpeed = 1.0f; // 1.0 = fills in 1 second
-
-	[ExportGroup("Enemy")]
-	/// <summary>Seconds the enemy spends aiming before it releases its shot.</summary>
-	[Export] public float EnemyThinkTime = 1.0f;
-	/// <summary>Half-angle of the enemy's random aim cone, in degrees (180 = any direction).</summary>
-	[Export] public float EnemyAimSpreadDegrees = 25.0f;
-	/// <summary>Lowest launch power the enemy will pick, 0..1 of the force range.</summary>
-	[Export(PropertyHint.Range, "0,1")] public float EnemyMinPower = 0.3f;
-	/// <summary>Highest launch power the enemy will pick, 0..1 of the force range.</summary>
-	[Export(PropertyHint.Range, "0,1")] public float EnemyMaxPower = 0.9f;
+	[ExportGroup("Presentation")]
 	/// <summary>Center the camera on whichever combatant is acting, so a move somewhere else on the map is visible.</summary>
 	[Export] public bool CenterCameraOnActingCombatant = true;
+
+	/// <summary>
+	/// Build the developer overlay (F1): the live tuning surface from docs/parity
+	/// M0.7. It is the only lever that changes balance without a rebuild, so it is
+	/// on by default; turn it off for a screenshot or a recording.
+	/// </summary>
+	[Export] public bool EnableDevOverlay = true;
 
 	[ExportGroup("UI References")]
 	/// <summary>
@@ -81,6 +72,14 @@ public partial class GameManager : Node
 	[Export] public MatchRules Rules;
 
 	/// <summary>
+	/// How this match's AI seats play: the enemy's aim, its power range and how
+	/// long it thinks (docs/parity §7). Assigned in main_scene.tscn, and handed
+	/// unchanged to <see cref="MatchSetup"/> — the AI numbers have one home and
+	/// this is the reference to it, not a copy of it (§2).
+	/// </summary>
+	[Export] public AiProfile Profile;
+
+	/// <summary>
 	/// The map this match is fought on: its bounds, its pools and its start
 	/// positions (docs/parity §M0.4). Assigned in main_scene.tscn.
 	/// </summary>
@@ -107,6 +106,21 @@ public partial class GameManager : Node
 
 	/// <summary>The match's content and combatants.</summary>
 	public MatchSetup Setup { get; private set; }
+
+	/// <summary>The developer overlay: the live tuning surface (docs/parity M0.7).</summary>
+	public DevOverlay Dev { get; private set; }
+
+	/// <summary>
+	/// The rules the simulation actually runs on (docs/parity §7): the assigned
+	/// resource, or the fallback the setup created when nothing was assigned.
+	///
+	/// Everything that reads a rule reads it from here rather than from
+	/// <see cref="Rules"/>, so an edit made under a running match — by the dev
+	/// overlay, or by the editor writing the same resource instance — is what the
+	/// next shot uses. The resource this returns is the one the tuning surface
+	/// edits.
+	/// </summary>
+	public MatchRules ActiveRules => Setup?.Rules ?? Rules ?? MatchRules.Fallback;
 
 	/// <summary>The scene's UI layer, shared with the parts that draw into it.</summary>
 	public CanvasLayer UiLayer { get; private set; }
@@ -282,10 +296,6 @@ public partial class GameManager : Node
 		Setup = new MatchSetup
 		{
 			Name = "MatchSetup",
-			EnemyThinkTime = EnemyThinkTime,
-			EnemyAimSpreadDegrees = EnemyAimSpreadDegrees,
-			EnemyMinPower = EnemyMinPower,
-			EnemyMaxPower = EnemyMaxPower,
 		};
 		AddChild(Setup);
 
@@ -296,7 +306,17 @@ public partial class GameManager : Node
 		UpdateTurnLabel();
 
 		// Build the match: the content, the seed and one chain per seat.
-		Setup.Build(Catalog, Rules, MatchSeed, World, StructureContainer);
+		Setup.Build(Catalog, Rules, Profile, MatchSeed, World, StructureContainer);
+
+		// The tamper panel (docs/parity M0.7) is built once the match exists, so
+		// it lists the resources this match is actually running on rather than the
+		// ones the scene happens to point at.
+		if (EnableDevOverlay)
+		{
+			Dev = new DevOverlay { Name = "DevOverlay" };
+			AddChild(Dev);
+			Dev.Build(Catalog, ActiveRules, Profile, World?.Map);
+		}
 
 		// The HUD is built from the roster the setup resolved.
 		BuildUnitIcons();
@@ -466,6 +486,12 @@ public partial class GameManager : Node
 
 		if (!IsPlayerTurn || SelectedStructure == null) return;
 
+		// While the tamper panel is open it owns the keyboard: aiming and charging
+		// are read from the Input singleton, which does not know an event was
+		// handled, so a designer stepping through a tunable would otherwise be
+		// swinging the aim at the same time (docs/parity M0.7).
+		if (Dev != null && Dev.IsOpen) return;
+
 		HandleAiming((float)delta);
 		HandleFiringLogic((float)delta);
 	}
@@ -473,7 +499,7 @@ public partial class GameManager : Node
 	private void HandleAiming(float delta)
 	{
 		float input = Input.GetAxis("aim_left", "aim_right");
-		_currentAimAngle += input * RotationSpeed * delta;
+		_currentAimAngle += input * ActiveRules.EffectiveAimRotationSpeed * delta;
 
 		// Switch the unit to launch with Q or E.
 		if (Input.IsActionJustPressed("switch_ammo_next")) CycleUnit(1);
@@ -529,7 +555,10 @@ public partial class GameManager : Node
 		// 2. While Holding
 		if (_isCharging && Input.IsActionPressed("fire_shot"))
 		{
-			var effectiveChargeSpeed = _isChargingUp ? ChargeSpeed : -1f * ChargeSpeed;
+			// The charge rate is the match's (docs/parity §7), so how long a player
+			// has to place a shot is balance a designer can move, not a constant.
+			float chargeSpeed = ActiveRules.EffectiveChargeSpeed;
+			var effectiveChargeSpeed = _isChargingUp ? chargeSpeed : -1f * chargeSpeed;
 			_currentPowerPercent += effectiveChargeSpeed * delta;
 			_currentPowerPercent = Mathf.Clamp(_currentPowerPercent, 0f, 1f);
 			if (_currentPowerPercent == 1f)

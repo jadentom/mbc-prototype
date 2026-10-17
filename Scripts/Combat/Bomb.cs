@@ -11,14 +11,14 @@ namespace MbcPrototype.Combat;
 /// The ammo of a weapon: it flies ballistically, and where it goes off it
 /// damages everything near the impact by distance.
 ///
-/// Every number it needs — damage, both blast radii, and the falloff curve
-/// between them — is data (docs/parity §2, §7). Nothing here is tuned in code,
-/// so a balance change is an edit to a <see cref="UnitDefinition"/> or to the
-/// match's <see cref="MatchRules"/> and not a rebuild.
+/// Every number it needs — damage, both blast radii, the falloff curve between
+/// them and the gravity it falls at — is data (docs/parity §2, §7). Nothing here
+/// is tuned in code, so a balance change is an edit to a
+/// <see cref="UnitDefinition"/> or to the match's <see cref="MatchRules"/> and not
+/// a rebuild.
 /// </summary>
 public partial class Bomb : CharacterBody3D, ILaunchedAmmo
 {
-	public float Gravity = 9.8f;
 	[Export] public GpuParticles3D ExplosionParticles;
 
 	/// <summary>
@@ -30,8 +30,12 @@ public partial class Bomb : CharacterBody3D, ILaunchedAmmo
 	/// <summary>The roster entry this shot was fired as: its damage and blast radii.</summary>
 	public UnitDefinition Unit { get; private set; }
 
-	/// <summary>The match's global rules: the blast falloff curve.</summary>
-	public MatchRules Rules { get; private set; }
+	/// <summary>
+	/// The match's global rules: the blast falloff curve and the gravity it falls
+	/// at. Held rather than copied, so a value edited during a match (docs/parity
+	/// M0.7) is what the flight and the blast use.
+	/// </summary>
+	public MatchRules Rules { get; private set; } = MatchRules.Fallback;
 
 	private bool _exploded = false;
 
@@ -40,7 +44,7 @@ public partial class Bomb : CharacterBody3D, ILaunchedAmmo
 	{
 		Velocity = launch.Velocity;
 		Unit = launch.Unit;
-		Rules = launch.Rules;
+		Rules = launch.Rules ?? MatchRules.Fallback;
 		TurnEvent = launch.TurnEvent;
 	}
 
@@ -49,7 +53,7 @@ public partial class Bomb : CharacterBody3D, ILaunchedAmmo
 		if (_exploded) return;
 
 		Vector3 v = Velocity;
-		v.Y -= Gravity * (float)delta;
+		v.Y -= Rules.EffectiveGravity * (float)delta;
 		Velocity = v;
 
 		// Any solid contact ends the flight and sets the blast off: the ground, a
@@ -108,11 +112,11 @@ public partial class Bomb : CharacterBody3D, ILaunchedAmmo
 	/// </summary>
 	private void ApplyBlastDamage()
 	{
-		if (Unit == null || Rules == null)
+		if (Unit == null)
 		{
 			// Only reachable if a bomb was spawned outside the launch path; inside
-			// a match both are always supplied.
-			GD.PushError("Bomb: launched without a unit definition or match rules — no damage dealt.");
+			// a match the unit is always supplied.
+			GD.PushError("Bomb: launched without a unit definition — no damage dealt.");
 			return;
 		}
 

@@ -1,5 +1,6 @@
 using Godot;
 using MbcPrototype.Core;
+using MbcPrototype.Rules;
 using MbcPrototype.TurnSystem;
 using MbcPrototype.Units;
 
@@ -30,8 +31,9 @@ public static class AmmoLauncher
 
 	/// <summary>
 	/// Instantiates the given unit's ammo from <paramref name="origin"/>,
-	/// launches it with the combatant's shared force settings, and registers the
-	/// TurnEvent that keeps the turn alive until the shot has fully resolved.
+	/// launches it with the match's ballistics and the launcher's own reach, and
+	/// registers the TurnEvent that keeps the turn alive until the shot has fully
+	/// resolved.
 	/// </summary>
 	/// <param name="unit">Which unit to fire, from the match's catalog.</param>
 	/// <param name="origin">The structure the shot is launched from.</param>
@@ -57,8 +59,15 @@ public static class AmmoLauncher
 		}
 		if (origin == null || !GodotObject.IsInstanceValid(origin) || origin.IsDestroyed) return;
 
-		float force = Mathf.Lerp(gm.MinLaunchForce, gm.MaxLaunchForce, Mathf.Clamp(powerPercent, 0f, 1f));
-		Vector3 velocity = (DirectionFromAimAngle(aimAngleRadians) * force) + (Vector3.Up * gm.UpwardBias);
+		// Every number the shot is made of comes from the match's rules and from
+		// the launcher's own definition (docs/parity §7): the force range, the
+		// upward bias and the muzzle height are the rules'; the reach multiplier is
+		// the *launcher's*, which is what makes one launcher out-throw another
+		// without a line of code. Nothing here is a literal a designer cannot reach.
+		MatchRules rules = gm.ActiveRules;
+		float reachScale = origin.Definition?.LaunchForceScale ?? 0f;
+		float force = rules.LaunchForce(powerPercent, reachScale);
+		Vector3 velocity = (DirectionFromAimAngle(aimAngleRadians) * force) + (Vector3.Up * rules.EffectiveUpwardBias);
 
 		// The projectile (and everything it triggers — landing, damage,
 		// destruction cascades, etc.) must fully resolve before control
@@ -68,8 +77,9 @@ public static class AmmoLauncher
 		var instance = unit.ProjectileScene.Instantiate<Node3D>();
 		// Set before AddChild: a node that is not in the tree yet has no global
 		// transform to read, and the spawn container sits at the origin, so the
-		// local transform is the global one.
-		instance.Position = origin.GlobalPosition + Vector3.Up * 2.0f;
+		// local transform is the global one. The height it starts at is the rules'
+		// muzzle height, not a literal: it is the number that moves when arcs do.
+		instance.Position = origin.GlobalPosition + Vector3.Up * rules.EffectiveMuzzleHeight;
 
 		if (instance is not ILaunchedAmmo ammo)
 		{
@@ -78,7 +88,7 @@ public static class AmmoLauncher
 			return;
 		}
 
-		ammo.Initialize(new AmmoLaunch(unit, gm.Rules, origin, velocity, turnEvent));
+		ammo.Initialize(new AmmoLaunch(unit, rules, origin, velocity, turnEvent));
 
 		// Parented inside the scene, never the tree root: a reload of the scene
 		// (how a finished match is restarted) frees the scene alone, so ammo

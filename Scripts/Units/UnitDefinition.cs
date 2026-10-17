@@ -91,6 +91,21 @@ public partial class UnitDefinition : Resource
 	/// </summary>
 	[Export] public bool CanBeBuilt = false;
 
+	/// <summary>
+	/// How far this unit throws, as a multiplier on the match's launch force range
+	/// (<see cref="MbcPrototype.Rules.MatchRules.LaunchForce"/>, docs/parity §7).
+	///
+	/// Reach belongs to the *launcher*: it is read off the definition of the
+	/// structure the shot is fired from, so this is the number to change to make one
+	/// launcher out-throw another, and the reason a second launcher can arrive as
+	/// data. A unit that never launches — a Bomb — states nothing.
+	///
+	/// Zero means "not set": a launcher without one throws the match's own reach
+	/// (a multiplier of 1), and the shipped launcher states 1.0 so the number has
+	/// one home (§2).
+	/// </summary>
+	[Export] public float LaunchForceScale = 0f;
+
 	/// <summary>Icon the HUD draws for this unit. Art is ours and replaceable.</summary>
 	[Export] public Texture2D Icon;
 

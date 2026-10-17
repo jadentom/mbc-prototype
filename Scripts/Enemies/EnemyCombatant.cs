@@ -13,31 +13,23 @@ namespace MbcPrototype.Enemies;
 /// defeat rule — the only difference is that its aim and power come from
 /// <see cref="ChooseAimAngle"/> and a random roll instead of from input.
 ///
-/// Each of its turns it plans exactly one action and releases it after
-/// <see cref="ThinkTime"/>, working through the catalog's buildable units in
-/// order. Override <see cref="ChooseAimAngle"/> (or the planning step in
-/// <see cref="BeginTurn"/>) to build a smarter enemy without touching the turn
-/// system — docs/parity M6 replaces this with one real planner.
+/// Every number it plays by lives in its <see cref="Profile"/> (docs/parity §7),
+/// so there is no enemy tuning in this file or anywhere above it. Each of its
+/// turns it plans exactly one action and releases it after the profile's think
+/// time, working through the catalog's buildable units in order. Override
+/// <see cref="ChooseAimAngle"/> (or the planning step in <see cref="BeginTurn"/>)
+/// to build a smarter enemy without touching the turn system — docs/parity M6
+/// replaces this with one real planner.
 /// </summary>
 public partial class EnemyCombatant : NodeChainCombatant
 {
 	/// <summary>
-	/// Seconds spent aiming (and visibly charging) before the shot is released.
-	/// Also the value the power preview ramps over.
+	/// The AI's numbers: how long it thinks, how widely it sprays, and the power
+	/// range it picks from. Handed in at match setup (docs/parity §7 — one home
+	/// per number), and the fallbacks below stand in only for a combatant built
+	/// outside a match.
 	/// </summary>
-	[Export] public float ThinkTime = 1.0f;
-
-	/// <summary>
-	/// Half-angle of the random aim cone around the direction to the target, in
-	/// degrees. 0 aims dead straight, 180 fires in any direction at all.
-	/// </summary>
-	[Export] public float AimSpreadDegrees = 25.0f;
-
-	/// <summary>Lowest launch power the AI will pick, as a fraction of the force range.</summary>
-	[Export(PropertyHint.Range, "0,1")] public float MinPowerPercent = 0.3f;
-
-	/// <summary>Highest launch power the AI will pick, as a fraction of the force range.</summary>
-	[Export(PropertyHint.Range, "0,1")] public float MaxPowerPercent = 0.9f;
+	public AiProfile Profile { get; set; } = AiProfile.Fallback;
 
 	public override bool IsPlayerControlled => false;
 
@@ -85,13 +77,13 @@ public partial class EnemyCombatant : NodeChainCombatant
 		}
 
 		_acting = true;
-		_thinkTimer = Mathf.Max(ThinkTime, 0f);
+		_thinkTimer = Mathf.Max(Profile?.ThinkTime ?? 0f, 0f);
 
 		_plannedUnit = buildable[_nextUnitIndex % buildable.Count];
 		_nextUnitIndex++;
 
 		_plannedAimAngle = ChooseAimAngle();
-		_plannedPowerPercent = Random.RandfRange(MinPowerPercent, MaxPowerPercent);
+		_plannedPowerPercent = Random.RandfRange(Profile?.MinPowerPercent ?? 0f, Profile?.MaxPowerPercent ?? 1f);
 
 		Preview(0f);
 		GD.Print($"[Enemy] Planning {_plannedUnit.DisplayName}: {Mathf.RadToDeg(_plannedAimAngle):0}°, power {_plannedPowerPercent:0.00}");
@@ -119,7 +111,8 @@ public partial class EnemyCombatant : NodeChainCombatant
 
 		// Ramp the visible power up to the planned value while "thinking", so an
 		// AI turn reads exactly like a player charge.
-		float progress = ThinkTime > 0f ? Mathf.Clamp(1f - (_thinkTimer / ThinkTime), 0f, 1f) : 1f;
+		float thinkTime = Profile?.ThinkTime ?? 0f;
+		float progress = thinkTime > 0f ? Mathf.Clamp(1f - (_thinkTimer / thinkTime), 0f, 1f) : 1f;
 		Preview(_plannedPowerPercent * progress);
 
 		if (_thinkTimer > 0f) return;
@@ -134,8 +127,8 @@ public partial class EnemyCombatant : NodeChainCombatant
 
 	/// <summary>
 	/// Picks a random aim direction: the direction to the target, opened up by a
-	/// random angle within <see cref="AimSpreadDegrees"/>. With a small spread the
-	/// AI stays dangerous; at 180° it is pure random.
+	/// random angle within the profile's <see cref="AiProfile.AimSpreadDegrees"/>.
+	/// With a small spread the AI stays dangerous; at 180° it is pure random.
 	/// </summary>
 	private float ChooseAimAngle()
 	{
@@ -157,7 +150,8 @@ public partial class EnemyCombatant : NodeChainCombatant
 		// facing `flat` is atan2(x, z) — the inverse of AmmoLauncher's mapping and
 		// the same convention the player's aiming uses.
 		float toTarget = Mathf.Atan2(flat.X, flat.Z);
-		return toTarget + Mathf.DegToRad(Random.RandfRange(-AimSpreadDegrees, AimSpreadDegrees));
+		float spread = Profile?.AimSpreadDegrees ?? 180f;
+		return toTarget + Mathf.DegToRad(Random.RandfRange(-spread, spread));
 	}
 
 	/// <summary>The ground position used to measure "closest" when picking targets.</summary>

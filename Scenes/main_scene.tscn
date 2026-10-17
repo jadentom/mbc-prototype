@@ -1,10 +1,11 @@
-[gd_scene load_steps=10 format=3 uid="uid://ntoepobspfl6"]
+[gd_scene load_steps=11 format=3 uid="uid://ntoepobspfl6"]
 
 [ext_resource type="Script" uid="uid://dvmv4ifdu3jbn" path="res://Scripts/Core/GameManager.cs" id="1_0f027"]
 [ext_resource type="Texture2D" uid="uid://b285731ydsbg2" path="res://Assets/opengameart_grass.png" id="1_nfk4m"]
 [ext_resource type="Resource" path="res://Resources/Units/unit_catalog.tres" id="3_cat01"]
 [ext_resource type="Resource" path="res://Resources/Rules/match_rules.tres" id="4_rule01"]
 [ext_resource type="Resource" path="res://Resources/Maps/development_map.tres" id="5_map01"]
+[ext_resource type="Resource" path="res://Resources/AI/ai_profile.tres" id="6_ai001"]
 
 [sub_resource type="PhysicsMaterial" id="PhysicsMaterial_o3jxj"]
 
@@ -50,6 +51,7 @@ VictoryLabel = NodePath("../UI/VictoryLabel")
 RestartLabel = NodePath("../UI/RestartLabel")
 Catalog = ExtResource("3_cat01")
 Rules = ExtResource("4_rule01")
+Profile = ExtResource("6_ai001")
 Map = ExtResource("5_map01")
 
 [node name="UI" type="CanvasLayer" parent="."]

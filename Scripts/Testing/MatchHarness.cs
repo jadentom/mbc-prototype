@@ -29,7 +29,21 @@ namespace MbcPrototype.Testing;
 /// Options: <c>--turns</c> (rounds to play, default 4, and a cap when replaying),
 /// <c>--seed</c> (default 12345), <c>--record</c> (write the log here),
 /// <c>--replay</c> (play this log), <c>--expect</c> (fail unless the final hash is
-/// this one), <c>--quiet</c>.
+/// this one), <c>--tune=&lt;target&gt;.&lt;Property&gt;=&lt;value&gt;</c> (change one of the
+/// match's numbers before it starts; repeatable), <c>--save-tuning</c> (write the
+/// tuned numbers back into their resources), <c>--quiet</c>.
+///
+/// <c>--tune</c> and <c>--save-tuning</c> go through
+/// <see cref="TuningSurface"/> — the same surface the developer overlay edits
+/// (docs/parity M0.7) — so "change a damage value and replay the match" is a
+/// command rather than an afternoon:
+///
+/// <code>
+/// godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --turns=10 --seed=7 \
+///     --replay=/tmp/m.json --tune=bomb.Damage=6
+/// </code>
+///
+/// A different state hash is the proof the change reached the simulation.
 ///
 /// A replay stops when its log runs out — the log is the whole of what happened —
 /// so replaying a log and recording the same match end at the same place, and the
@@ -50,6 +64,11 @@ public partial class MatchHarness : Node
 	private string _replayPath;
 	private string _expectedHash;
 	private bool _quiet;
+
+	// "target.Property=value" arguments, applied through the tuning surface before
+	// the match starts (docs/parity M0.7).
+	private readonly List<string> _tunes = new List<string>();
+	private bool _saveTuning;
 
 	private GameManager _match;
 	private bool _finished;
@@ -100,6 +119,10 @@ public partial class MatchHarness : Node
 			return;
 		}
 		_match.MatchSeed = _seed;
+
+		// Before the scene enters the tree: the match reads its resources while it
+		// builds itself, so a tuned number has to be on the resource by then.
+		if (!ApplyTuning()) return;
 
 		AddChild(world);
 
@@ -311,6 +334,70 @@ public partial class MatchHarness : Node
 		return true;
 	}
 
+	/// <summary>
+	/// Applies every <c>--tune=target.Property=value</c> to the match's resources
+	/// before the match builds itself, through the same
+	/// <see cref="TuningSurface"/> the developer overlay drives (docs/parity M0.7).
+	///
+	/// A number nobody can find is reported with the list of ones that exist, so a
+	/// typo costs a run and not a hunt. With <c>--save-tuning</c> the change is
+	/// written back to the resource as well, which is the overlay's Enter key from
+	/// a script — and how the write-back is testable without a window.
+	/// </summary>
+	private bool ApplyTuning()
+	{
+		if (_tunes.Count == 0) return true;
+
+		TuningSurface surface = TuningSurface.For(_match.Catalog, _match.Rules, _match.Profile, _match.Map);
+		if (surface.Entries.Count == 0)
+		{
+			Fail("--tune was given but the match has no tunable resources at all.");
+			return false;
+		}
+
+		foreach (string tune in _tunes)
+		{
+			int separator = tune.LastIndexOf('=');
+			if (separator <= 0)
+			{
+				Fail($"--tune={tune} is not target.Property=value.");
+				return false;
+			}
+
+			string label = tune.Substring(0, separator);
+			string text = tune.Substring(separator + 1);
+
+			TuningEntry entry = surface.Find(label);
+			if (entry == null)
+			{
+				Fail($"--tune={tune}: no number called '{label}'. Known numbers: {surface.DescribeLabels()}.");
+				return false;
+			}
+
+			if (!double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double value))
+			{
+				Fail($"--tune={tune}: '{text}' is not a number.");
+				return false;
+			}
+
+			double before = entry.Read();
+			entry.Value = value;
+			if (!_quiet) GD.Print($"[Harness] tuned {entry.Label}: {before:0.###} -> {entry.Read():0.###}");
+		}
+
+		if (_saveTuning)
+		{
+			if (!surface.Save())
+			{
+				Fail("--save-tuning could not write the resources back.");
+				return false;
+			}
+			if (!_quiet) GD.Print($"[Harness] wrote {_tunes.Count} tuned number(s) back into the resources.");
+		}
+
+		return true;
+	}
+
 	private bool ParseArguments()
 	{
 		foreach (string argument in OS.GetCmdlineUserArgs())
@@ -326,9 +413,11 @@ public partial class MatchHarness : Node
 				case "record": _recordPath = value; break;
 				case "replay": _replayPath = value; break;
 				case "expect": _expectedHash = value; break;
+				case "tune": _tunes.Add(value); break;
+				case "save-tuning": _saveTuning = true; break;
 				case "quiet": _quiet = true; break;
 				default:
-					Fail($"unknown option '{argument}'. Options: --turns= --seed= --record= --replay= --expect= --quiet.");
+					Fail($"unknown option '{argument}'. Options: --turns= --seed= --record= --replay= --expect= --tune= --save-tuning --quiet.");
 					return false;
 			}
 		}

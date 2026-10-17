@@ -1,5 +1,6 @@
 using Godot;
 using MbcPrototype.Core;
+using MbcPrototype.Rules;
 using MbcPrototype.TurnSystem;
 using MbcPrototype.Units;
 
@@ -12,17 +13,25 @@ namespace MbcPrototype.Combat;
 /// Which unit it is deploying is data, not a class: this scene is what a Hub's
 /// <see cref="UnitDefinition.ProjectileScene"/> points at, and the definition it
 /// is launched with decides the hit points of the structure it leaves behind.
+/// How it flies is data too: the gravity that pulls it down is the match's
+/// (docs/parity §7), so there is no fall rate in this file.
 /// </summary>
 public partial class Projectile : CharacterBody3D, ILaunchedAmmo
 {
 	[Export] public PackedScene BaseScene = GD.Load<PackedScene>("res://Scenes/structure.tscn");
-	public float Gravity = 9.8f;
 
 	/// <summary>The structure the shot was fired from; null for a shot whose launcher is gone.</summary>
 	public Structure CreatorStructure { get; private set; }
 
 	/// <summary>The roster entry this shot was fired as: what the deployed node becomes.</summary>
 	public UnitDefinition Unit { get; private set; }
+
+	/// <summary>
+	/// The match's global rules, which is where the flight comes from: gravity is
+	/// read from here every step (docs/parity §7), so a rules resource edited
+	/// under a running match changes the arcs in flight.
+	/// </summary>
+	public MatchRules Rules { get; private set; } = MatchRules.Fallback;
 
 	/// <summary>
 	/// Resolved when this projectile finishes its work (lands and deploys).
@@ -37,13 +46,14 @@ public partial class Projectile : CharacterBody3D, ILaunchedAmmo
 		Velocity = launch.Velocity;
 		CreatorStructure = launch.Origin;
 		Unit = launch.Unit;
+		Rules = launch.Rules ?? MatchRules.Fallback;
 		TurnEvent = launch.TurnEvent;
 	}
 
 	public override void _PhysicsProcess(double delta)
 	{
 		Vector3 v = Velocity;
-		v.Y -= Gravity * (float)delta;
+		v.Y -= Rules.EffectiveGravity * (float)delta;
 		Velocity = v;
 
 		if (MoveAndSlide())

@@ -173,7 +173,7 @@ closes; the **size** column is a rough ordering device, not a promise.
 | **Energy** | 1/3/7 per unit, max 35, per-round refill, income units | none | **L** |
 | **Turn model** | a turn is an energy budget; round ends when all have spent or skipped; order rotates left | one launch per turn; `CurrentTurn` counts rotation wraps | **L** |
 | **Units** | 18, three levels | 2 of 12 as resources: `hub` and `bomb` in a `UnitCatalog`; `AmmoLauncher` takes a `UnitDefinition` and dispatches through `ILaunchedAmmo` | **L** — ten units to go, and none of them needs a launcher change |
-| **Tunability** | (our own requirement, §2) | the roster, its numbers and the blast curve are resources; the launch forces, the pool scatter and the AI knobs are still C# defaults exported on `GameManager` | **M** — M0.7 finishes it |
+| **Tunability** | (our own requirement, §2) | the roster, its numbers, the blast curve, the launch ballistics and the AI's profile are all resources; no gameplay number is left in a `.cs` file. The F1 dev overlay edits any of them live and writes them back, and `Scenes/harness.tscn --tune=…` does the same headlessly | ✅ M0.7 |
 | **Players** | up to 4, teams, shared line of sight | exactly 2, hardcoded in `GameManager.CreateCombatants()` | **M** — generalise the shape, not the count |
 | **Map** | authored, sized, terrain states, wrap-around | one `MapDefinition` resource: bounds, a height field (flat today), the two 1v1 start positions and the pool field. The minimap and the pools read it (M0.4). Still flat, still unwrapped | **L** — M3 makes the world wrap and the heights matter |
 | **Terrain height** | height changes launch range | none — everything sits at y=0 | **M** — three states, not four |
@@ -336,17 +336,47 @@ is cheap because of it.
   Landed with the M0.5 harness as the check: the same command log produces the
   same state hash as before the split (`c6cd89abf0971af6`, 10 rounds, seed 7),
   which is how a refactor this size is known to be behaviour-preserving.
-- **M0.7 — Tuning data and the dev overlay.** All the numbers from §7 in
-  resources — a `MatchRules` resource for the global ones, per-unit values in
-  their definitions, world values in the map — with the code's literals deleted
-  and every duplicate collapsed to one home. Then a **dev overlay** that edits
-  live values during a match and writes them back to the resource, so a balance
-  change is seconds of work and not a rebuild.
+- **M0.7 — Tuning data and the dev overlay.** **Landed.** Every number §7 lists
+  for the systems that exist is in a resource, with the code's literals deleted:
+  - **Launch ballistics** — gravity, the launch force range, the upward bias and
+    the muzzle height — moved off `GameManager`'s exports and into
+    `MatchRules`; the ammo reads them from the rules it was launched with, so
+    there is one launch path and one set of arcs.
+  - **Reach per launcher** is a unit number: a launcher's own
+    `UnitDefinition.LaunchForceScale` multiplies the match's force range, which
+    is what §7 means by "launch force range per launcher" and what will let a
+    second launcher out-throw the Hub without a code change. `MatchRules` owns
+    the derivation, so the lerp exists once.
+  - **Aiming and charging** — the aim rotation speed and how fast the power
+    meter fills — are rules too. They are balance, not presentation: they decide
+    how long a player has to place a shot.
+  - **The AI's numbers** were exported three times (on `GameManager`, on
+    `MatchSetup` *and* on `EnemyCombatant`, injected from each into the next) and
+    are now one `AiProfile` resource the combatant reads itself. That triplication
+    is exactly the pattern §2 rule 2 names as a bug waiting to happen.
+  - **The dev overlay** — F1 in a running match — lists every number the match's
+    resources export, changes it live (arrows; Shift for ×10, Ctrl for ÷10), and
+    writes the lot back into the `.tres` files on Enter. `R` re-reads them from
+    disk, which is the other half of "changeable without a restart": a value
+    edited in the editor while the match runs is picked up without relaunching.
+    It shows 34 numbers today and no list of them is maintained by hand — it is a
+    view over the resources, so the next number added to one appears in it.
+  - **The same surface is reachable from the harness** (`--tune=bomb.Damage=6`,
+    optionally `--save-tuning`), so "change a damage value, replay, compare the
+    state hash" is a command and not an afternoon — §2's iteration loop, and how
+    the write-back is tested without a window.
+
+  Landed behaviour-preserving: the M0.5 harness produces the same state hash as
+  before the move (`c6cd89abf0971af6`, 10 rounds, seed 7), and the same hash
+  changes the moment a number does.
 
 **Exit criteria:** the game still plays as it does today, on the development map,
 with the two existing units; a match is fully described by (map, seed, command
 log) and replays identically from it; and **a damage value can be changed and
-felt without touching a `.cs` file or restarting the editor**.
+felt without touching a `.cs` file or restarting the editor**. All three hold:
+the harness replays the log to the same hash, and
+`--tune=bomb.Damage=6` on that replay lands structures at different hit points
+and a different hash.
 
 ### M1 — The core loop: energy, rounds, turns, build menu
 
@@ -648,10 +678,13 @@ catch a neighbour?" and never to settle "should a Bomb do 3?":
 
 **Iteration.** The measure of this prototype is how fast a number can be
 changed, played with and kept or reverted. When a milestone makes that slower,
-the milestone is wrong.
+the milestone is wrong. M0.7 is the standing answer: F1 edits any number the
+match's resources export, Enter writes it back, and `--tune=` does the same for
+a replayed match — so the loop is "change, replay, compare", and no milestone
+needs to invent its own.
 
-**AI.** One planner, with its weights in data, so that personality is tuning
-rather than code when more opponents arrive.
+**AI.** One planner, with its weights in an `AiProfile` resource (M0.7), so
+that personality is tuning rather than code when more opponents arrive.
 
 **Documentation.** `AGENTS.md` is the entry point for this repo and currently
 describes a game that will no longer exist. Update it in the same commit as the
@@ -673,13 +706,13 @@ requires a code edit to change.
 | number | home | starting value |
 | --- | --- | --- |
 | **Per unit:** hit points, damage, level/energy cost, vision radius, launch-force scale, build permission, blast radii | each unit's `UnitDefinition` | HP and damage: *(manual)* — Hub 5, Harvester 5, Anti-Air 3, Shield 3, Crawler 3, Repair 1, Balloon 1; Bomb/Missile 3, EMP 2, Cluster 1.5 × 3, Crawler 4. Costs 1/3/7 *(manual)*. Vision and launch scale: *(guess)* |
-| **Match rules:** turn clock, max stored energy, main-Hub income, Harvester income (on/off pool), rounds-per-game if any, disable duration (EMP, anti-air reload) | `MatchRules` | clock 60 s *(manual)*, cap 35 *(manual)*, Hub 7/round *(manual)*, Harvester 3 / 1 *(manual)*, disable 1 turn cycle *(manual)* |
+| **Match rules:** turn clock, max stored energy, main-Hub income, Harvester income (on/off pool), rounds-per-game if any, disable duration (EMP, anti-air reload), aim rotation speed, charge-meter speed | `MatchRules` | clock 60 s *(manual)*, cap 35 *(manual)*, Hub 7/round *(manual)*, Harvester 3 / 1 *(manual)*, disable 1 turn cycle *(manual)*; aim 3 rad/s, a full charge in one second *(guess)* |
 | **Blast falloff curve** — the shape between full and no damage | `MatchRules` | two bands: full inside the unit's inner radius, half out to its outer radius *(guess)* |
-| **Launch ballistics:** gravity, arc, launch force range per launcher, slope effect on the first | `MatchRules` | gravity 9.8 (`Projectile.Gravity`) *(guess)*, force 20 (`MaxLaunchForce`) *(guess)* |
+| **Launch ballistics:** gravity, arc, muzzle height, launch force range per launcher (and the slope effect on the first, M3) | `MatchRules`, with each launcher's `UnitDefinition.LaunchForceScale` | gravity 9.8, force 4→20, upward bias 5, muzzle height 2 *(guess)*; the shipped Hub throws at the match's reach (scale 1.0) |
 | **Cord rules:** reach per launcher, cord-node spacing, Power Spike taper and node limit | `MatchRules` | spacing and reach *(guess)*; 50-node limit *(manual)* |
 | **World:** map bounds, terrain heights per state, height→range curve, pool sizes, the two start positions | the `MapDefinition` | bounds 475×475 today, pool side 6.0, heights *(guess)* |
 | **Effects:** anti-air range, EMP radius, shield radius, homing turn rate, crawler speed | the relevant `UnitDefinition` (+ `MatchRules` for shared defaults) | relative sizes only *(manual)*: EMP > anti-air, EMP > shield; absolutes *(guess)* |
-| **AI:** every weight the planner uses — aggression, expansion, defence, target preference | `AiProfile` resource | *(guess)* |
+| **AI:** every weight the planner uses — how long it thinks, its aim spread, the power range it fires at, and later aggression, expansion, defence, target preference | `AiProfile` (`Resources/AI/ai_profile.tres`) | think 1 s, spread ±25°, power 0.3–0.9 *(guess)* |
 | **Presentation:** nothing gameplay. Keep it out of this table | — | — |
 
 **The rule for anything new.** A number added by a milestone lands in a resource
@@ -774,13 +807,16 @@ stated exceptions
 
 ## 10. Where to start
 
-**M0.1–M0.3, then M1.** Concretely, the first commit is `UnitDefinition` plus
-the hit-point model, because until a unit is data and its numbers are data,
-every unit added is throwaway work. The second is the energy/round loop, because
-that is the difference between a duel and this genre.
+**M0 has landed, so M1 is next.** The foundations are in: units, their numbers,
+the hit-point and blast model, the cord graph, the map, the command log and the
+tuning surface are all data, and a match is reproducible from (map, seed, command
+log). The next commit worth making is the energy/round loop, because that is the
+difference between a duel and this genre.
 
-Then M0.7 early, before the roster grows: the tuning surface is cheapest to put
-in place while there are two units' worth of numbers rather than twelve.
+M0.7 landed with two units rather than twelve on purpose: the tuning surface was
+cheapest to put in place before the roster grew, and every unit added from here
+inherits it — a new `.tres` whose numbers appear in the F1 overlay without anyone
+adding them to a list.
 
 The earliest point at which this is a *game* rather than a prototype is the end
 of **M1**: energy, rounds, income, a build menu, and Hubs and Harvesters

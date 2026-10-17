@@ -5,3 +5,10 @@
 [resource]
 script = ExtResource("1_ta2or")
 BlastOuterBandFraction = 0.5
+Gravity = 9.8
+MinLaunchForce = 4.0
+MaxLaunchForce = 20.0
+UpwardBias = 5.0
+MuzzleHeight = 2.0
+AimRotationSpeed = 3.0
+ChargeSpeed = 1.0

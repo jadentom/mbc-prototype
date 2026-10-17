@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="AiProfile" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://Scripts/Enemies/AiProfile.cs" id="1_aiprof"]
+
+[resource]
+script = ExtResource("1_aiprof")
+ThinkTime = 1.0
+AimSpreadDegrees = 25.0
+MinPowerPercent = 0.3
+MaxPowerPercent = 0.9

@@ -18,6 +18,11 @@ prototype built with **Godot 4.5.1 (C#/.NET)**. Read this before editing.
 - Units are **data**: a `UnitDefinition` per unit in a `UnitCatalog` resource
   (see *Unit data*). There are two today — `hub` and `bomb` — and adding a third
   is a resource plus a behaviour, not a branch in the launcher.
+- **Every gameplay number is data** (docs/parity §2): unit numbers on their
+  `UnitDefinition`, the match's globals on `MatchRules`, the world's on the
+  `MapDefinition`, the enemy's on an `AiProfile`. No balance number belongs in a
+  `.cs` file, and none belongs in two places. F1 in a running match opens the dev
+  overlay, which edits any of them live and writes them back — see *Tuning*.
 - The map is **data**: a `MapDefinition` resource (`Resources/Maps/`) holds the
   play area, the height field, the energy pools and the two start positions
   (see *Map data*). One map is shipped and the whole of development happens on
@@ -106,11 +111,12 @@ not stored in the scene. See [docs/camera](docs/camera/README.md).
 | `Scripts/Core/PlayerCombatant.cs` | The human's combatant: a `NodeChainCombatant` whose aim/charge/fire comes from input in `GameManager`. |
 | `Scripts/TurnSystem/Combatant.cs` | Abstract turn participant (team, defeat rule, `BeginTurn`/`EndTurn`). The rotation only ever talks to this. |
 | `Scripts/TurnSystem/NodeChainCombatant.cs` | Combatant built from a chain of structures: structure registry, root lookup (`FindRootStructure()`, which follows the cords), defeat check, `Launch()`, and the `RootUnit` definition its root spawns with. |
-| `Scripts/Enemies/EnemyCombatant.cs` | The AI enemy: plans one action per turn (working through the catalog's buildable units), random aim/power, fires after `ThinkTime`. |
+| `Scripts/Enemies/EnemyCombatant.cs` | The AI enemy: plans one action per turn (working through the catalog's buildable units), random aim/power, fires after its `Profile`'s think time. Every number it plays by is the profile's, not its own. |
 | `Scripts/Units/UnitDefinition.cs` | **What a unit is**: the resource holding its numbers — level/energy cost, hit points, damage, blast radii, vision, build permission, icon, and the ammo scene. It replaces the old `AmmoType` enum. |
 | `Scripts/Units/UnitCatalog.cs` | The roster: the one list of units the HUD, the launcher and the AI read. `Find(id)`, `Buildable`, `Validate()`. |
 | `Scripts/Units/UnitTraits.cs` | `UnitTraits { Structure, Weapon }` — what a unit is, for code that does not know it by name. |
-| `Scripts/Rules/MatchRules.cs` | The match's global numbers (docs/parity §7). Today the blast falloff curve; later the clock, energy and ballistics. |
+| `Scripts/Rules/MatchRules.cs` | **The match's global numbers** (docs/parity §7): the blast falloff curve, the launch ballistics (gravity, force range, upward bias, muzzle height) and the aim/charge speeds. The exports are what a designer edits; the `Effective…` members are what the simulation reads, with the fallbacks a match with no rules at all needs. |
+| `Scripts/Enemies/AiProfile.cs` | **How an AI plays** (§7): think time, aim spread, the power range it fires at. One resource read by the combatant itself — the four numbers used to be exported on `GameManager`, `MatchSetup` *and* `EnemyCombatant` at once. |
 | `Scripts/World/MapDefinition.cs` | **The map**: bounds, height field and terrain states, energy pools, and the start positions each seat of a match begins at. Builds its own `PoolField`. |
 | `Scripts/World/TerrainState.cs` | `TerrainState { Ground, Plateau, Mountain }` — three states, not the original's four: water is out of the first slice. |
 | `Scripts/Combat/AmmoLauncher.cs` | The single launch path for both sides: takes a `UnitDefinition`, instantiates its scene, hands it an `AmmoLaunch`, registers the `TurnEvent`. |
@@ -124,7 +130,9 @@ not stored in the scene. See [docs/camera](docs/camera/README.md).
 | `Scripts/World/PurplePool.cs` | One purple pool: a solid rounded square of energy with a rim of dead grass around it, pulsing between a resting violet and a bright glow. Knows its own footprint (`ContainsXZ`/`OverlapsXZ`). |
 | `Scripts/Simulation/MatchCommand.cs` | **One action, as data**: the seat, the unit id, the origin structure id, aim and power. Serializes to a dictionary; names things by id, never by reference. |
 | `Scripts/Simulation/CommandLog.cs` | **The match's input**: every action in the order it was applied, with the seed and map, written and read as JSON. Applying is GameManager's job, not the log's. |
-| `Scripts/Testing/MatchHarness.cs` | The headless regression harness (`Scenes/harness.tscn`): plays a match with nobody at the keyboard, records its log, prints a state hash, and can replay a log and assert the hash. |
+| `Scripts/Testing/MatchHarness.cs` | The headless regression harness (`Scenes/harness.tscn`): plays a match with nobody at the keyboard, records its log, prints a state hash, and can replay a log and assert the hash. `--tune=target.Property=value` changes a number before the match runs. |
+| `Scripts/Testing/TuningSurface.cs` | **The tuning surface**: every number the match's resources export, read and written by name, saved back to the `.tres` files. Built by walking the resources' own property lists, so a number added to any of them shows up with no list to maintain. Drives both the overlay and `--tune`. |
+| `Scripts/Testing/DevOverlay.cs` | **The F1 dev overlay**: a panel over the tuning surface — arrows pick and change a number live, Enter writes it back to its resource, `R` re-reads the files. Built in code, and it owns the keyboard while it is open. |
 | `Shaders/CableShader.gdshader` | Visual cable between chained nodes. |
 
 ## Unit data (`Resources/`)
@@ -136,15 +144,19 @@ the seam every later unit depends on.
 
 ```
 Resources/Units/hub.tres            # Hub: level 7, 5 hit points, the launcher
+                                    #   (LaunchForceScale 1.0 — see *Tuning*)
 Resources/Units/bomb.tres           # Bomb: level 1, damage 3, radii 1.5 / 3.0
 Resources/Units/unit_catalog.tres   # the roster: hub, bomb (references, not copies)
-Resources/Rules/match_rules.tres    # the match's global numbers (blast falloff today)
+Resources/Rules/match_rules.tres    # the match's global numbers (blast curve,
+                                    #   ballistics, aim and charge speeds)
+Resources/AI/ai_profile.tres        # how the AI seats play (think, aim, power)
 ```
 
-- `GameManager.Catalog` and `GameManager.Rules` are the two references, assigned
-  in `main_scene.tscn` and handed to `MatchSetup.Build()`. It validates the
-  catalog at match start (duplicate ids, a unit with nothing to launch) — a
-  content error is reported there rather than swallowed.
+- `GameManager.Catalog`, `GameManager.Rules`, `GameManager.Profile` and
+  `GameManager.Map` are the references, assigned in `main_scene.tscn` and handed
+  to `MatchSetup.Build()`. It validates the catalog at match start (duplicate
+  ids, a unit with nothing to launch) — a content error is reported there rather
+  than swallowed.
 - A definition's `ProjectileScene` is its **behaviour**: that scene's root script
   implements `ILaunchedAmmo`, so the launcher configures it without knowing what
   it is. `UnitTraits` (`Structure`, `Weapon`) is what *other* code branches on.
@@ -157,11 +169,19 @@ Resources/Rules/match_rules.tres    # the match's global numbers (blast falloff 
   default, so **a default must never be a real number**: `Level` defaults to 0
   ("no level set") and `CanBeBuilt` to false, and the two shipped units state
   their real values. A default that were a real cost would be the same number
-  living in two places (§2). The same rule holds for `MatchRules` and
-  `MapDefinition`, whose `Validate()` reports what is still unset.
+  living in two places (§2). The same rule holds for `MatchRules`,
+  `MapDefinition` and `AiProfile`, whose `Validate()` reports what is still
+  unset — so an unset number is loud at match start, and the code fallbacks that
+  keep the project running with no content are never a second opinion.
 - The `hub.tres`/`bomb.tres` split is also where hit points live (§M0.2): a
   structure's hit points are its definition's `HitPoints`, and there is no longer
   one number for every structure.
+- **Reach is per launcher**: `LaunchForceScale` multiplies the match's force
+  range, and `AmmoLauncher` reads it off the definition of the *structure it is
+  firing from*, not off the ammo. A weapon never states one; the Hub states 1.0.
+  The interpolation itself lives in `MatchRules.LaunchForce()`, so a second
+  consumer (M6's range estimate, M3's height→range curve) asks rather than
+  repeats it.
 
 ## Map data (`Resources/Maps/`)
 
@@ -271,10 +291,15 @@ Team/targeting details:
   keys); `fire_shot` charges a power bar; release launches the current *unit*.
   The AI drives the same `_currentAimAngle`-equivalent through
   `ShowAimPreview()` and `AmmoLauncher`, so both sides shoot identically.
-- **Enemy tuning** (all exported on `GameManager`): `EnemyThinkTime`,
-  `EnemyAimSpreadDegrees` (180 = fully random), `EnemyMinPower`/`EnemyMaxPower`,
-  `CenterCameraOnActingCombatant`. Where the two sides *start* is not tuning and
-  is not here: it is the map's `StartPositions`.
+- **Enemy tuning** is the `AiProfile` resource (`Resources/AI/ai_profile.tres`),
+  read by the combatant itself: think time, aim spread (180° = fully random), and
+  the power range it fires at. It used to be exported on three nodes at once —
+  do not reintroduce that. `EnemyCombatant.Profile` is the reference;
+  `AiProfile.Fallback` is a deliberately degenerate enemy for a match with no
+  content. Where the two sides *start* is not tuning and is not here: it is the
+  map's `StartPositions`. Camera centring on the acting seat
+  (`CenterCameraOnActingCombatant`) is still on `GameManager`, because it is
+  presentation and not balance.
 - **Unit data & the blast**: every number a unit has lives on its
   `UnitDefinition` (see *Unit data*), and the only numbers elsewhere are the
   match's `MatchRules`. A weapon damages by distance, not by what it touched:
@@ -341,6 +366,43 @@ Two consequences worth knowing before changing the turn flow:
 `GameManager.StateHash()` fingerprints the live structures (id, unit, hit points,
 parent, position) in id order. Take it between turns, while nothing is resolving.
 
+## Tuning: the resources, the overlay, and `--tune`
+
+**The whole tuning surface is the match's resources** (docs/parity §2, §7, M0.7).
+Four homes, and every number is in exactly one of them:
+
+| what | home |
+| --- | --- |
+| one unit: hit points, damage, blast radii, level/cost, vision, build permission, **reach** (`LaunchForceScale`) | its `UnitDefinition` |
+| the match: the blast falloff curve, the launch ballistics (gravity, force range, upward bias, muzzle height), the aim and charge speeds | `MatchRules` |
+| the world: bounds, the height field and per-state heights, pool size and coverage, start positions | the `MapDefinition` |
+| the AI: think time, aim spread, the power range it fires at | the `AiProfile` |
+
+Two ways to move a number, both going through `TuningSurface`:
+
+- **The F1 overlay** (`Scripts/Testing/DevOverlay.cs`), in a running match:
+  up/down pick a row, left/right change it (Shift ×10, Ctrl ÷10), **Enter** writes
+  every edited number back into its `.tres`, **R** re-reads the files, Esc closes.
+  A change is live the moment it is made — the simulation reads these resources
+  every time it fires — so the loop is "F1, move a number, close, shoot".
+  `GameManager.EnableDevOverlay` turns it off (a screenshot, a recording).
+- **`--tune=<target>.<Property>=<value>`** on the harness, for a headless or
+  replayed match (`MatchHarness.cs`), optionally with `--save-tuning` to write the
+  values back. Targets are `rules`, `ai`, `map` and each unit's id.
+
+The surface is **built by walking each resource's exported properties**, so it
+never needs updating when a number is added: an export shows up in the panel and
+in `--tune` by existing. Only properties a resource's own script declares are
+listed (`PROPERTY_USAGE_SCRIPT_VARIABLE`) — a `Resource` also reports
+`resource_local_to_scene` and friends, and listing those would put a checkbox
+that means nothing at the top of the panel.
+
+Adding a number therefore means: export it on the right resource with an *unset*
+default, state its real value in the `.tres`, report it from that resource's
+`Validate()`, and read it through the resource everywhere it is used. Do not add
+an export to `GameManager` for it — that is where the AI's four numbers and the
+launch ballistics used to live, and §2 names the resulting duplication as a bug.
+
 ## Tests
 
 `Scenes/harness.tscn` plays a real match headlessly: the harness is the player's
@@ -353,12 +415,26 @@ godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --turns=10 --see
 godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --replay=/tmp/m.json --expect=<hash>
 ```
 
+```sh
+# the same log, one number changed: a different hash is the proof it reached the
+# simulation (docs/parity §2's "edit, replay, compare")
+godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --replay=/tmp/m.json \
+    --tune=bomb.Damage=6
+# and, to keep the change, write it back into the .tres the way the overlay does
+godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --turns=1 \
+    --tune=bomb.Damage=6 --save-tuning
+```
+
 `--fixed-fps 60` paces the run by frames rather than by the wall clock: it is much
 faster, and the think-timers stop depending on real time. The harness exits
 non-zero when an `--expect` hash does not match, and fails rather than hangs when
 a match stops making progress (it prints what was still in the world). Change a
 number in a `.tres`, replay a recorded log, and a different hash is the proof the
 change reached the simulation.
+
+`--tune` names a number the way the overlay shows it — `<target>.<Property>`, with
+the targets `rules`, `ai`, `map` and each unit's id — and the labels it knows are
+printed when one does not exist.
 
 ## Purple pools
 
@@ -448,6 +524,10 @@ read it before touching anything camera-related. In short:
 - `switch_ammo_next`: E — `switch_ammo_previous`: Q. Despite the names (an
   M0.1 leftover), these step through the catalog's buildable units, one at a
   time and wrapping at both ends.
+- `dev_overlay`: F1 — opens the developer overlay (see *Tuning*). It is the only
+  dev binding here: the panel's own keys (arrows, Enter, R, Esc) are read raw in
+  `DevOverlay._Input` rather than through actions, so a dev tool does not consume
+  the game's input map.
 
 ## Conventions & gotchas
 

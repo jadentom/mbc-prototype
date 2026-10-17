@@ -22,16 +22,6 @@ namespace MbcPrototype.Core;
 /// </summary>
 public partial class MatchSetup : Node
 {
-	[ExportGroup("Enemy")]
-	/// <summary>Seconds an AI combatant spends aiming before it releases its shot.</summary>
-	[Export] public float EnemyThinkTime = 1.0f;
-	/// <summary>Half-angle of an AI's random aim cone, in degrees (180 = any direction).</summary>
-	[Export] public float EnemyAimSpreadDegrees = 25.0f;
-	/// <summary>Lowest launch power an AI will pick, 0..1 of the force range.</summary>
-	[Export(PropertyHint.Range, "0,1")] public float EnemyMinPower = 0.3f;
-	/// <summary>Highest launch power an AI will pick, 0..1 of the force range.</summary>
-	[Export(PropertyHint.Range, "0,1")] public float EnemyMaxPower = 0.9f;
-
 	[ExportGroup("Seat colours")]
 	/// <summary>Minimap colour of the human's structures.</summary>
 	[Export] public Color HumanSeatColor = new Color(0, 0, 0, 0.9f);
@@ -45,6 +35,12 @@ public partial class MatchSetup : Node
 
 	/// <summary>The match's global rules (never null once built: a fallback stands in).</summary>
 	public MatchRules Rules { get; private set; }
+
+	/// <summary>
+	/// How this match's AI seats play (docs/parity §7). One profile for every AI
+	/// combatant; M6 is where a match might hand out one each.
+	/// </summary>
+	public AiProfile Profile { get; private set; }
 
 	/// <summary>The seed the match runs on.</summary>
 	public int Seed { get; private set; }
@@ -71,10 +67,11 @@ public partial class MatchSetup : Node
 	/// </summary>
 	/// <param name="catalog">The roster, or null.</param>
 	/// <param name="rules">The match rules, or null.</param>
+	/// <param name="profile">How this match's AI seats play, or null.</param>
 	/// <param name="matchSeed">The seed to run on; zero means "pick one and say so".</param>
 	/// <param name="world">The world, for the seats and the starting structure.</param>
 	/// <param name="structureContainer">Where spawned structures are parented.</param>
-	public void Build(UnitCatalog catalog, MatchRules rules, int matchSeed, MatchWorld world, Node3D structureContainer)
+	public void Build(UnitCatalog catalog, MatchRules rules, AiProfile profile, int matchSeed, MatchWorld world, Node3D structureContainer)
 	{
 		Catalog = catalog;
 		if (Catalog == null)
@@ -94,6 +91,14 @@ public partial class MatchSetup : Node
 			Rules = new MatchRules();
 		}
 		Rules.Validate();
+
+		Profile = profile;
+		if (Profile == null)
+		{
+			GD.PushWarning("MatchSetup: no AiProfile assigned — using the code's fallback, which is an enemy with no aim.");
+			Profile = AiProfile.Fallback;
+		}
+		Profile.Validate();
 
 		Seed = ResolveSeed(matchSeed);
 		Commands = new CommandLog
@@ -159,10 +164,11 @@ public partial class MatchSetup : Node
 					Team = seat,
 					MinimapColor = OpponentSeatColor,
 					RootUnit = startingUnit,
-					ThinkTime = EnemyThinkTime,
-					AimSpreadDegrees = EnemyAimSpreadDegrees,
-					MinPowerPercent = EnemyMinPower,
-					MaxPowerPercent = EnemyMaxPower,
+					// The AI's numbers are the profile's, handed straight to the
+					// combatant that plays by them (docs/parity §7): they are not
+					// copied onto this node first, which is how the same four
+					// numbers used to exist in three places (§2).
+					Profile = Profile,
 				};
 
 			if (combatant is NodeChainCombatant chain) chain.StructureContainer = structureContainer;
