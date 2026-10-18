@@ -106,12 +106,12 @@ The minimap is **built at runtime** by `MatchCamera.CreateMinimap()` (a
 `SubViewport` + top-down camera + `TextureRect` in the bottom-right corner),
 not stored in the scene. See [docs/camera](docs/camera/README.md).
 
-The **build menu** is built at runtime too, by `BuildMenu.Build()` from the
-catalog: the energy/clock strip, the `1`/`3`/`7` pages, the page's unit buttons
-and the Skip round button, plus the launch view's unit/cost/power readout. A unit
-added to the roster therefore gets a button on its level's page with no scene
-edit, and a level with no unit gets no page. It is added under the scene's `UI`
-CanvasLayer, so the scene does not list it.
+The **build menu** is built at runtime too, by `BuildMenu.Build()` from what the
+selected launcher may fire: the energy/clock strip, the `1`/`3`/`7` pages, the
+page's unit buttons and the Skip round button, plus the launch view's
+unit/cost/power readout. A unit added to the roster therefore gets a button on its
+level's page with no scene edit, and a level with no unit gets no page. It is added
+under the scene's `UI` CanvasLayer, so the scene does not list it.
 
 Its panels are pinned to the **bottom-left corner at a fixed size** (the edge
 margins are constants at the top of `BuildMenu`, and `project.godot` lays the HUD
@@ -156,6 +156,7 @@ panel:
 | `Scripts/Units/UnitDefinition.cs` | **What a unit is**: the resource holding its numbers — level/energy cost, hit points, damage, blast radii, vision, build permission, icon, and the ammo scene. It replaces the old `AmmoType` enum. |
 | `Scripts/Units/UnitCatalog.cs` | The roster: the one list of units the HUD, the launcher and the AI read. `Find(id)`, `Buildable`, `Validate()`. |
 | `Scripts/Units/UnitTraits.cs` | `UnitTraits { Structure, Weapon, Launcher, Hub, Harvester }` — what a unit is, for code that does not know it by name. |
+| `Scripts/Units/UnitSilhouette.cs` | **What a unit looks like**: the shapes a structure can be drawn as (disc, triangle, square) and the meshes that draw them. Every silhouette fits the node's own footprint, so a unit's art never changes what the rules measure. |
 | `Scripts/Rules/MatchRules.cs` | (see *Tuning*) the match's global numbers: the blast curve, the ballistics, the aim/charge speeds, **the energy economy** (cap, starting purse, main-Hub and Harvester income) and **the turn clock**. |
 | `Scripts/Enemies/AiProfile.cs` | **How an AI plays** (§7): think time, aim spread, the power range it fires at. One resource read by the combatant itself — the four numbers used to be exported on `GameManager`, `MatchSetup` *and* `EnemyCombatant` at once. |
 | `Scripts/World/MapDefinition.cs` | **The map**: bounds, height field and terrain states, energy pools, and the start positions each seat of a match begins at. Builds its own `PoolField`. |
@@ -207,10 +208,13 @@ Resources/AI/ai_profile.tres        # how the AI seats play (think, aim, power)
   it is. `UnitTraits` (`Structure`, `Weapon`, `Launcher`, `Hub`, `Harvester`) is
   what *other* code branches on — so a Harvester is a structure that pays income,
   and only the Hub is a launcher, without anything testing for the id `"hub"`.
-- The build menu's pages and buttons are built from `Catalog.Buildable` (which
-  is rebuilt on every read, so a live `CanBeBuilt` change is obeyed), in roster
-  order and grouped by level, so an icon and a unit can never disagree.
-  `switch_ammo_next`/`switch_ammo_previous` (Q/E) move the menu's cursor.
+- The build menu's pages and buttons are built from what the **selected**
+  launcher may fire — `Catalog.LaunchableFrom(SelectedStructure.Definition)`, which
+  is `Catalog.Buildable` narrowed by the launcher's `Launches` list, rebuilt on
+  every read so a live `CanBeBuilt` change is obeyed — in roster order and grouped
+  by level, so an icon and a unit can never disagree.
+  `switch_ammo_next`/`switch_ammo_previous` (Q/E) move the menu's cursor, and a
+  level no unit of that subset sits at gets no page.
 - **Adding a unit**: a new `.tres` referencing a new ammo scene, plus an entry in
   `unit_catalog.tres`. Nothing in the launcher, the HUD or the turn code changes
   — its level becomes a page if that level is new, its cost is its level, and it
@@ -234,6 +238,21 @@ Resources/AI/ai_profile.tres        # how the AI seats play (think, aim, power)
   (§M0.2): a structure's hit points are its definition's `HitPoints` (Hub 5,
   Harvester 5; a Bomb has none), and there is no longer one number for every
   structure.
+- **What a unit looks like is data too.** `UnitDefinition.Silhouette` picks the
+  shape a structure is drawn as (`UnitSilhouette`: the Hub is `Disc`, the
+  Harvester `Triangle`), and `Structure.ApplySilhouette()` swaps the authored plate
+  for the one `UnitSilhouettes.CreateMesh()` builds. A silhouette is a *flat plate
+  on the node's own footprint* (radius 1.0, 0.2 thick, whatever its outline), so
+  cord lengths, landing positions, the selection ring and the minimap dots are
+  unaffected — a new shape is drawing, not a rule. `Unset` falls back to the disc
+  and is reported by `Validate()`.
+- **A launcher says what it may fire.** `UnitDefinition.Launches` is a list of
+  unit ids, and empty means "anything the roster offers" (the Hub today). It is
+  read in one place — `UnitCatalog.LaunchableFrom(origin)` — which is what the
+  build menu lists, what the AI plans from, what the harness fires from and what
+  `ApplyCommand` enforces, so a restricted launcher is data rather than a check
+  each caller has to remember. Ids rather than references, and an id the roster
+  does not have is a content error `Validate()` reports.
 - **Reach is per launcher**: `LaunchForceScale` multiplies the match's force
   range, and `AmmoLauncher` reads it off the definition of the *structure it is
   firing from*, not off the ammo. A weapon never states one; the Hub states 1.0.
@@ -364,10 +383,15 @@ Team/targeting details:
   whether the shot happened), and only then calls `actor.SpendEnergy(unit.Level)`.
   A build that could not happen costs nothing and is reported. Nothing may spend
   energy or launch around that path.
-- **Nothing but a launcher builds.** `UnitTraits.Launcher` is on the Hub only, so a
-  Harvester — or any future structure without the flag — can stand in a chain but
-  cannot fire. The check is in `ApplyCommand` (the simulation) *and* in the menu's
-  `TryBuild`, so neither code nor a click can bypass it.
+- **Nothing but a launcher builds, and only what its resource lists.**
+  `UnitTraits.Launcher` is on the Hub only, so a Harvester — or any future
+  structure without the flag — can stand in a chain but cannot fire; and a
+  launcher's `Launches` list narrows what it fires (empty = the whole roster).
+  The rule lives in `UnitCatalog.LaunchableFrom` / `CanLaunch` and is enforced in
+  `ApplyCommand` (the simulation, so a replay obeys it too) *and* in the menu's
+  `TryBuild`, so neither code nor a click can bypass it. `GameManager.CanBuildAnything`
+  asks per launcher, because a chain whose launchers fire nothing the seat can
+  afford has nothing to do that turn.
 - **Income runs at the round end** (`MatchSetup.GrantRoundIncome`, driven by
   `RoundEnded`): a root `Hub` pays `MainHubIncome`, every live `Harvester` pays the
   on-pool or off-pool amount by whether its centre is in a pool, and a disabled
@@ -388,6 +412,13 @@ Team/targeting details:
   right-click or the Cancel button go back to the menu without spending. A shot
   ends the turn: the menu closes with it and reopens on the player's *next* turn,
   with whatever energy was left.
+- **The menu is the selected structure's menu.** `SelectStructure()` re-fills it
+  through `EnterBuildMode()`, and the roster it shows is
+  `LaunchableFrom(SelectedStructure.Definition)` — so clicking another Hub offers
+  that Hub's own subset. Clicking a structure that launches nothing (a Harvester)
+  shows the same panel **greyed out** with the reason on it and the keyboard
+  bindings off (`BuildMenu.IsBlocked`); Space still skips the round. A no-launcher
+  is therefore a state the UI explains, not a menu that silently refuses clicks.
 - **Aiming**: `aim_left`/`aim_right` rotate `_currentAimAngle` (A/D + arrow
   keys); `fire_shot` charges a power bar; release launches the chosen unit.
   The AI drives the same `_currentAimAngle`-equivalent through
@@ -506,7 +537,9 @@ never needs updating when a number is added: an export shows up in the panel and
 in `--tune` by existing. Only properties a resource's own script declares are
 listed (`PROPERTY_USAGE_SCRIPT_VARIABLE`) — a `Resource` also reports
 `resource_local_to_scene` and friends, and listing those would put a checkbox
-that means nothing at the top of the panel.
+that means nothing at the top of the panel. Enums are skipped too
+(`ClassIsEnum`, the `Enum`/`Flags` hints): a silhouette or a set of traits is an
+authored choice, not a number to slide, and it would show up as a bare integer.
 
 Adding a number therefore means: export it on the right resource with an *unset*
 default, state its real value in the `.tres`, report it from that resource's

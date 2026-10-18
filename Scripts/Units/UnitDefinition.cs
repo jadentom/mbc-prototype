@@ -106,6 +106,36 @@ public partial class UnitDefinition : Resource
 	/// </summary>
 	[Export] public float LaunchForceScale = 0f;
 
+	/// <summary>
+	/// The shape this unit's structures are drawn as, so a Harvester reads as a
+	/// Harvester and not as another Hub (see <see cref="UnitSilhouette"/>). Art,
+	/// not balance: every silhouette fits the node's own footprint, so nothing the
+	/// rules measure changes with it.
+	///
+	/// <see cref="UnitSilhouette.Unset"/> means "the resource did not say", which
+	/// falls back to the disc and is reported by <see cref="UnitCatalog.Validate"/>.
+	/// </summary>
+	[Export] public UnitSilhouette Silhouette = UnitSilhouette.Unset;
+
+	/// <summary>
+	/// The units this *launcher* may fire, by id: the whole of a launcher's
+	/// choice, and the list the build menu, the AI and
+	/// <c>GameManager.ApplyCommand</c> all read (docs/parity §2 — one home for
+	/// what a unit can do).
+	///
+	/// Empty means **anything the roster offers**, which is the general-purpose
+	/// launcher's case (today's Hub). A specialised launcher states a subset —
+	/// <c>Launches = ["bomb"]</c> fires nothing but Bombs — and everything
+	/// downstream narrows with it: the menu shows only that subset, the AI plans
+	/// from it, and a launch of anything else is refused as a rule rather than as
+	/// an accident.
+	///
+	/// Ids rather than references, so the roster can reorder its units without a
+	/// launcher's list pointing at the wrong one, and a listed id the roster does
+	/// not have is a content error <see cref="UnitCatalog.Validate"/> reports.
+	/// </summary>
+	[Export] public Godot.Collections.Array<string> Launches = new Godot.Collections.Array<string>();
+
 	/// <summary>Icon the HUD draws for this unit. Art is ours and replaceable.</summary>
 	[Export] public Texture2D Icon;
 
@@ -134,6 +164,20 @@ public partial class UnitDefinition : Resource
 
 	/// <summary>True when this unit goes off over an area rather than at a point.</summary>
 	public bool HasBlast => OuterRadius > 0f;
+
+	/// <summary>
+	/// True when this launcher is allowed to fire <paramref name="unit"/>. An empty
+	/// <see cref="Launches"/> list means "anything", so the general-purpose launcher
+	/// states nothing; whether the unit is in the roster at all is
+	/// <see cref="UnitCatalog.LaunchableFrom"/>'s question.
+	/// </summary>
+	public bool CanLaunch(UnitDefinition unit)
+	{
+		if (unit == null) return false;
+		if (Launches == null || Launches.Count == 0) return true;
+
+		return Launches.Contains(unit.Id);
+	}
 
 	public override string ToString()
 	{

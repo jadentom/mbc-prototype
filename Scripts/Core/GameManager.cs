@@ -422,7 +422,10 @@ public partial class GameManager : Node
 		if (PowerBar != null) PowerBar.Visible = false;
 		HideAimIndicator();
 
-		if (!_buildMode) EnterBuildMode(HumanCombatant);
+		// The menu belongs to the selected structure: re-fill it every time, so
+		// clicking a Harvester greys the roster out and clicking a Hub brings back
+		// what that Hub can fire.
+		EnterBuildMode(HumanCombatant);
 	}
 
 	/// <summary>
@@ -529,7 +532,14 @@ public partial class GameManager : Node
 		if (root != null) SelectStructure(root);
 	}
 
-	/// <summary>Opens the build menu for the pot of energy the player is holding.</summary>
+	/// <summary>
+	/// Opens the build menu for the pot of energy the player is holding — filled
+	/// with what the **selected structure** may fire, not with the whole roster
+	/// (<see cref="UnitCatalog.LaunchableFrom"/>): a launcher with a subset offers
+	/// its subset, and a structure that launches nothing (a Harvester) gets the
+	/// menu greyed out with the reason on it rather than a menu that silently
+	/// refuses every click.
+	/// </summary>
 	private void EnterBuildMode(Combatant combatant)
 	{
 		_buildMode = true;
@@ -541,16 +551,39 @@ public partial class GameManager : Node
 
 		if (combatant != null && Menu != null)
 		{
+			UnitDefinition origin = SelectedStructure?.Definition;
+			IReadOnlyList<UnitDefinition> launchable = LaunchableFromOrigin();
+
+			// Nothing this structure can fire: show the roster so the pages still
+			// read as a build menu, but inert, and say why.
+			bool blocked = launchable.Count == 0;
 			Menu.ShowBuild(
-				Catalog?.Buildable ?? System.Array.Empty<UnitDefinition>(),
+				blocked ? (Catalog?.Buildable ?? System.Array.Empty<UnitDefinition>()) : launchable,
 				combatant.Energy,
 				combatant.MaxEnergy,
 				IncomeOf(combatant),
-				_lastPage);
+				_lastPage,
+				blocked ? DescribeBlockedOrigin(origin) : null);
 			_lastPage = Menu.Page;
 		}
 
 		UpdateHud();
+	}
+
+	/// <summary>What the selected structure may fire, or nothing when nothing is selected.</summary>
+	private IReadOnlyList<UnitDefinition> LaunchableFromOrigin()
+	{
+		return Catalog?.LaunchableFrom(SelectedStructure?.Definition)
+			?? System.Array.Empty<UnitDefinition>();
+	}
+
+	/// <summary>The line a menu with nothing to build shows, naming the structure and what to do instead.</summary>
+	private string DescribeBlockedOrigin(UnitDefinition origin)
+	{
+		string name = origin?.DisplayName ?? "This structure";
+		if (origin == null) return "Nothing is selected — click a Hub to build from.";
+		if (!origin.IsLauncher) return $"{name} cannot launch units — click a Hub to build from.";
+		return $"{name} has nothing it can launch — check the roster.";
 	}
 
 	/// <summary>Leaves the menu and aims the chosen unit: the power meter takes over.</summary>
@@ -596,6 +629,11 @@ public partial class GameManager : Node
 			GD.Print($"[Build] {SelectedStructure?.Definition?.DisplayName ?? "That structure"} cannot launch units — only a Hub can.");
 			return;
 		}
+		if (!CanLaunchFromOrigin(unit))
+		{
+			GD.Print($"[Build] {SelectedStructure?.Definition?.DisplayName ?? "That structure"} cannot launch {unit.DisplayName}.");
+			return;
+		}
 		if (!actor.CanAfford(unit.Level))
 		{
 			GD.Print($"[Build] {unit.DisplayName} costs {unit.Level} energy; {actor.DisplayName} has {actor.Energy}.");
@@ -616,6 +654,15 @@ public partial class GameManager : Node
 	/// <summary>The keyboard half of the build menu: pages, the unit cursor, end turn.</summary>
 	private void HandleBuildInput()
 	{
+		// A menu with nothing to fire (a Harvester is selected) only offers the way
+		// out of the round: paging and choosing through a greyed roster would be
+		// keystrokes that cannot do anything.
+		if (Menu != null && Menu.IsBlocked)
+		{
+			if (Input.IsActionJustPressed("end_turn")) SkipTurn();
+			return;
+		}
+
 		if (Input.IsActionJustPressed("build_page_1")) ChoosePage(1);
 		if (Input.IsActionJustPressed("build_page_3")) ChoosePage(3);
 		if (Input.IsActionJustPressed("build_page_7")) ChoosePage(7);
@@ -1065,7 +1112,6 @@ public partial class GameManager : Node
 					GD.PushError($"GameManager: cannot apply {command.Describe()} — {origin.Definition?.DisplayName ?? "that structure"} cannot launch units.");
 					return;
 				}
-
 				UnitDefinition unit = Catalog?.Find(command.UnitId);
 				if (unit == null)
 				{
@@ -1075,6 +1121,14 @@ public partial class GameManager : Node
 				if (!unit.CanBeBuilt)
 				{
 					GD.PushError($"GameManager: cannot apply {command.Describe()} — '{unit.Id}' is not buildable in this match.");
+					return;
+				}
+
+				// What this launcher may fire is the launcher's own data, and this is
+				// the one place that enforces it for every seat (docs/parity §2).
+				if (!CanLaunchFromOrigin(unit, origin))
+				{
+					GD.PushError($"GameManager: cannot apply {command.Describe()} — {origin.Definition?.DisplayName ?? "that structure"} cannot launch '{unit.Id}'.");
 					return;
 				}
 				if (!actor.CanAfford(unit.Level))
@@ -1120,20 +1174,57 @@ public partial class GameManager : Node
 	}
 
 	/// <summary>
-	/// True when <paramref name="combatant"/> can pay for at least one buildable
-	/// unit. A turn with nothing affordable ends itself: a budget that cannot buy
-	/// anything is a turn that is over (docs/parity M1's "spent out").
+	/// True when the **selected** structure may fire <paramref name="unit"/> — the
+	/// menu's own question, and the one <see cref="TryBuild"/> asks before it
+	/// opens the launch view.
+	/// </summary>
+	private bool CanLaunchFromOrigin(UnitDefinition unit)
+	{
+		return CanLaunchFromOrigin(unit, SelectedStructure);
+	}
+
+	/// <summary>
+	/// True when <paramref name="structure"/> may fire <paramref name="unit"/>: it
+	/// is a launcher, and the unit is in what this launcher's resource says it
+	/// fires (<see cref="UnitCatalog.CanLaunch"/>). This is the rule, and
+	/// <see cref="ApplyCommand"/> enforces it for every launch — the player's, the
+	/// AI's and a replayed one's — so the menu can never offer a shot the
+	/// simulation would refuse.
+	/// </summary>
+	private bool CanLaunchFromOrigin(UnitDefinition unit, Structure structure)
+	{
+		if (structure == null || !IsLauncher(structure)) return false;
+
+		return Catalog?.CanLaunch(structure.Definition, unit) ?? false;
+	}
+
+	/// <summary>
+	/// True when <paramref name="combatant"/> can pay for at least one unit one of
+	/// its **launchers** may actually fire. A turn with nothing affordable ends
+	/// itself: a seat that cannot buy a shot is a seat that is spent out
+	/// (docs/parity M1).
+	///
+	/// It asks per launcher rather than per roster, because a launcher's
+	/// <see cref="UnitDefinition.Launches"/> subset decides what it can fire: a
+	/// chain whose only launcher fires nothing the seat can afford has nothing to
+	/// do this turn, however rich the roster is.
 	/// </summary>
 	public bool CanBuildAnything(Combatant combatant)
 	{
-		if (combatant == null) return false;
+		if (combatant is not NodeChainCombatant chain) return false;
 
-		IReadOnlyList<UnitDefinition> buildable = Catalog?.Buildable;
-		if (buildable == null) return false;
-
-		foreach (UnitDefinition unit in buildable)
+		foreach (Structure structure in chain.Structures)
 		{
-			if (unit != null && unit.Level > 0 && combatant.CanAfford(unit.Level)) return true;
+			if (structure == null || !IsInstanceValid(structure) || structure.IsDestroyed) continue;
+			if (!IsLauncher(structure)) continue;
+
+			IReadOnlyList<UnitDefinition> launchable = Catalog?.LaunchableFrom(structure.Definition);
+			if (launchable == null) continue;
+
+			foreach (UnitDefinition unit in launchable)
+			{
+				if (unit != null && unit.Level > 0 && combatant.CanAfford(unit.Level)) return true;
+			}
 		}
 		return false;
 	}

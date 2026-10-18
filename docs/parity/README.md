@@ -172,7 +172,7 @@ closes; the **size** column is a rough ordering device, not a promise.
 | **Blast damage** | a weapon damages what it strikes **and** what is near it, with a falloff curve nobody published | the two-band model survives, but every number in it is data: radii and damage on the unit, the band share on `MatchRules`; the Bomb does the manual's 3 | ✅ M0.2 |
 | **Energy** | 1/3/7 per unit, max 35, per-round refill, income units | a purse per combatant seeded from `MatchRules` (7), capped at 35, spent by `ApplyCommand` on the unit's `Level`, topped up at the round end by the main Hub (7) and Harvesters (3 on a pool, 1 off it), and carried forward | ✅ M1 |
 | **Turn model** | a turn is one launch; a round is every seat's turn in order, ending when all have spent out or skipped; order rotates left | **a turn is one launch**: its shot resolves and the next seat takes the next turn. A **round** is those turns alternating until every seat has spent out or skipped, with income paid and the order rotated left at its end; a skip forfeits the rest of the round and carries the energy forward. `TurnController` keeps the round and the turn-in-round as separate counters, and the human seat has a 60 s per-turn clock whose expiry is a recorded skip (M1) | ✅ M1 |
-| **Units** | 18, three levels | 3 of 12 as resources: `hub`, `harvester` and `bomb` in a `UnitCatalog`; `AmmoLauncher` takes a `UnitDefinition` and dispatches through `ILaunchedAmmo`; only a `Launcher`-traited structure (the Hub) may fire | **L** — nine units to go, and none of them needs a launcher change |
+| **Units** | 18, three levels | 3 of 12 as resources: `hub`, `harvester` and `bomb` in a `UnitCatalog`; `AmmoLauncher` takes a `UnitDefinition` and dispatches through `ILaunchedAmmo`; only a `Launcher`-traited structure (the Hub) may fire, and a launcher's `Launches` list narrows what it fires (`UnitCatalog.LaunchableFrom` — the menu, the AI and `ApplyCommand` all read it). Each unit also states its `Silhouette`, so the Harvester is a triangle and the Hub a disc on the map | **L** — nine units to go, and none of them needs a launcher change |
 | **Tunability** | (our own requirement, §2) | the roster, its numbers, the blast curve, the launch ballistics, the energy economy (cap, starting purse, Hub and Harvester income), the turn clock and the AI's profile are all resources; no gameplay number is left in a `.cs` file. The F1 dev overlay edits any of them live and writes them back, and `Scenes/harness.tscn --tune=…` does the same headlessly | ✅ M0.7, M1 |
 | **Players** | up to 4, teams, shared line of sight | exactly 2, hardcoded in `GameManager.CreateCombatants()` | **M** — generalise the shape, not the count |
 | **Map** | authored, sized, terrain states, wrap-around | one `MapDefinition` resource: bounds, a height field (flat today), the two 1v1 start positions and the pool field. The minimap and the pools read it (M0.4). Still flat, still unwrapped | **L** — M3 makes the world wrap and the heights matter |
@@ -414,12 +414,17 @@ is the hook M4's EMP will drive; nothing disables a unit yet. The HUD's
 "next round +N" is that same computation, so the projection cannot drift from the
 payment.
 
-**The build menu** (`Scripts/Presentation/BuildMenu.cs`) is built from the roster:
-an energy/clock strip, a page per level the roster has a unit at (`1`/`3`/`7`), the
-page's unit buttons (disabled when unaffordable), End turn, and the launch view
-(unit, cost, charge) that the power meter reads. The player's turn is two views:
-*build* (pages, Q/E cursor, Enter or a click) and *launch* (A/D aim, hold W to
-charge, release; Esc/right-click cancels back to the menu without spending).
+**The build menu** (`Scripts/Presentation/BuildMenu.cs`) is built from what the
+**selected structure** may fire — `UnitCatalog.LaunchableFrom`, which is the roster
+narrowed by that launcher's `Launches` list: an energy/clock strip, a page per
+level that subset has a unit at (`1`/`3`/`7`), the page's unit buttons (disabled
+when unaffordable), Skip round, and the launch view (unit, cost, charge) that the
+power meter reads. Clicking a structure that launches nothing (a Harvester) shows
+the same panel greyed out with the reason on it and its keys off, so the UI
+explains the state instead of refusing clicks one at a time. The player's turn is
+two views: *build* (pages, Q/E cursor, Enter or a click) and *launch* (A/D aim,
+hold W to charge, release; Esc/right-click cancels back to the menu without
+spending).
 
 **The turn clock** is `MatchRules.TurnClockSeconds` (60 s, 0 = no clock), shown as
 a countdown in the menu's strip. It pauses while a shot resolves, does not run in

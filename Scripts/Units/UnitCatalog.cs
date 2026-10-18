@@ -51,6 +51,41 @@ public partial class UnitCatalog : Resource
 		}
 	}
 
+	/// <summary>
+	/// The units <paramref name="origin"/> may fire, in roster order — the one
+	/// answer to "what can be built from here".
+	///
+	/// It is asked by everything that offers a build: the build menu lists it, the
+	/// AI plans from it, the headless harness fires from it, and
+	/// <c>GameManager.ApplyCommand</c> refuses anything that is not in it. That is
+	/// what makes "a launcher may only launch a subset" a rule of the data rather
+	/// than a check somebody remembered to write: a launcher that is not a
+	/// launcher fires nothing, and a launcher with a
+	/// <see cref="UnitDefinition.Launches"/> subset fires only that.
+	///
+	/// Empty when the origin is not a launcher at all, or when nothing in the
+	/// roster matches what it may fire.
+	/// </summary>
+	public IReadOnlyList<UnitDefinition> LaunchableFrom(UnitDefinition origin)
+	{
+		var launchable = new List<UnitDefinition>();
+		if (origin == null || !origin.IsLauncher) return launchable;
+
+		foreach (UnitDefinition unit in Buildable)
+		{
+			if (origin.CanLaunch(unit)) launchable.Add(unit);
+		}
+		return launchable;
+	}
+
+	/// <summary>True when <paramref name="origin"/> may fire <paramref name="unit"/>.</summary>
+	public bool CanLaunch(UnitDefinition origin, UnitDefinition unit)
+	{
+		if (origin == null || !origin.IsLauncher || unit == null || !unit.CanBeBuilt) return false;
+
+		return origin.CanLaunch(unit);
+	}
+
 	/// <summary>The unit at <paramref name="index"/>, or null when out of range.</summary>
 	public UnitDefinition Get(int index)
 	{
@@ -104,6 +139,32 @@ public partial class UnitCatalog : Resource
 			if (unit.HitPoints < 0) GD.PushError($"UnitCatalog: '{unit.Id}' has negative hit points.");
 			if (unit.Level <= 0) GD.PushError($"UnitCatalog: '{unit.Id}' has no level (its energy cost) — set one in the unit's resource.");
 			if (unit.HasBlast && unit.Damage <= 0) GD.PushWarning($"UnitCatalog: '{unit.Id}' has blast radii but no damage.");
+
+			// A structure with no shape of its own is drawn as the ordinary disc and
+			// says so: the silhouette is data, and a unit that forgot to state one
+			// would otherwise be a Harvester that looks exactly like a Hub.
+			if (unit.IsStructure && unit.Silhouette == UnitSilhouette.Unset)
+			{
+				GD.PushWarning($"UnitCatalog: '{unit.Id}' states no silhouette — its structures will be drawn as the ordinary disc.");
+			}
+
+			// A launcher may name the units it fires; an id the roster does not have
+			// is content that has gone stale, and the launcher would offer nothing
+			// for it.
+			if (unit.Launches != null && !unit.IsLauncher && unit.Launches.Count > 0)
+			{
+				GD.PushWarning($"UnitCatalog: '{unit.Id}' lists the units it launches but is not a launcher — the list is ignored.");
+			}
+			if (unit.Launches != null)
+			{
+				foreach (string launched in unit.Launches)
+				{
+					if (Find(launched) == null)
+					{
+						GD.PushError($"UnitCatalog: '{unit.Id}' says it launches '{launched}', which the roster does not have.");
+					}
+				}
+			}
 			if (unit.Damage > 0 && !unit.HasBlast) GD.PushWarning($"UnitCatalog: '{unit.Id}' damages only what it strikes (no blast radii).");
 		}
 	}

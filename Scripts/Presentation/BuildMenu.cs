@@ -44,6 +44,12 @@ public partial class BuildMenu : Control
 
 	private static readonly Color PanelBorder = new Color(0.3f, 0.35f, 0.45f, 1f);
 
+	/// <summary>Colour of an ordinary hint line.</summary>
+	private static readonly Color HintColor = new Color(0.82f, 0.85f, 0.9f);
+
+	/// <summary>Colour of a hint that explains why nothing can be built: warmer, so it reads as a state and not as a tip.</summary>
+	private static readonly Color BlockedHintColor = new Color(1f, 0.8f, 0.5f);
+
 	// ------------------------------------------------------------------
 	// Where the HUD block sits
 	//
@@ -98,6 +104,14 @@ public partial class BuildMenu : Control
 	private int _shownClockSecond = int.MinValue;
 	private bool _clockRunning;
 
+	/// <summary>
+	/// Why this turn's menu cannot build anything, or null when it can. Set when
+	/// the selected structure is not a launcher (a Harvester): the roster is still
+	/// on screen, greyed, so the player can see what exists — the menu just is not
+	/// a way to fire it from there.
+	/// </summary>
+	private string _blockedReason;
+
 	private PanelContainer _statusPanel;
 	private PanelContainer _buildPanel;
 	private PanelContainer _launchPanel;
@@ -132,6 +146,14 @@ public partial class BuildMenu : Control
 
 	/// <summary>The page heading: "LEVEL 7 · 2 UNITS".</summary>
 	public string PageTitle => $"LEVEL {_page} · {_pageUnits.Count} UNIT(S)";
+
+	/// <summary>
+	/// True while the menu is up but nothing on it can be fired, because the
+	/// selected structure launches nothing (see <see cref="_blockedReason"/>). The
+	/// keyboard bindings are ignored in this state — the menu is a readout plus
+	/// the way to skip the round.
+	/// </summary>
+	public bool IsBlocked => _blockedReason != null;
 
 	/// <summary>
 	/// Builds the panel. Called once by the match, before the first turn; the
@@ -179,14 +201,24 @@ public partial class BuildMenu : Control
 	}
 
 	/// <summary>Fills a page from the roster, selects a page, and shows the menu for a turn.</summary>
-	/// <param name="buildable">The roster's buildable units (the catalog's own order).</param>
+	/// <param name="buildable">
+	/// The units the selected structure may fire — <see cref="UnitCatalog.LaunchableFrom"/>,
+	/// not the whole roster: a launcher with a subset shows its subset, and a
+	/// structure that is no launcher shows nothing buildable.
+	/// </param>
 	/// <param name="energy">Energy the acting player holds.</param>
 	/// <param name="maxEnergy">The cap, for the readout.</param>
 	/// <param name="income">What the next round is expected to pay, for the readout.</param>
 	/// <param name="preferredPage">The page the player was on, when it still exists.</param>
-	public void ShowBuild(IReadOnlyList<UnitDefinition> buildable, int energy, int maxEnergy, int income, int preferredPage)
+	/// <param name="blockedReason">
+	/// Why nothing on the menu may be fired, or null when it may. A reason greys
+	/// every unit and says so in the hint, which is what a selected Harvester
+	/// should look like.
+	/// </param>
+	public void ShowBuild(IReadOnlyList<UnitDefinition> buildable, int energy, int maxEnergy, int income, int preferredPage, string blockedReason = null)
 	{
 		_buildable = buildable ?? System.Array.Empty<UnitDefinition>();
+		_blockedReason = string.IsNullOrEmpty(blockedReason) ? null : blockedReason;
 
 		_levels.Clear();
 		foreach (UnitDefinition unit in _buildable)
@@ -220,6 +252,7 @@ public partial class BuildMenu : Control
 		_statusPanel.Visible = true;
 		_buildPanel.Visible = false;
 		_launchPanel.Visible = true;
+		_blockedReason = null;
 		_launchTitle.Text = $"LAUNCHING  {unit.DisplayName}   ·   {unit.Level} energy";
 		SetPower(0f);
 	}
@@ -246,15 +279,26 @@ public partial class BuildMenu : Control
 		{
 			_energyLabel.Text = $"Energy {energy} / {maxEnergy}     next round +{income}";
 		}
-		if (_costHint != null && _pageUnits.Count > 0)
+		if (_costHint != null && IsBlocked)
+		{
+			_costHint.Text = $"{_blockedReason}\nSpace skips the rest of the round.";
+			_costHint.Modulate = BlockedHintColor;
+		}
+		else if (_costHint != null && _pageUnits.Count > 0)
 		{
 			_costHint.Text = $"{PageTitle}   ·   Q/E pick   ·   Enter build   ·   Space skip";
+			_costHint.Modulate = HintColor;
 		}
 
 		for (int i = 0; i < _unitButtons.Count && i < _pageUnits.Count; i++)
 		{
 			int cost = _pageUnits[i].Level;
-			_unitButtons[i].Disabled = cost <= 0 || energy < cost;
+			_unitButtons[i].Disabled = IsBlocked || cost <= 0 || energy < cost;
+		}
+
+		for (int i = 0; i < _pageButtons.Count; i++)
+		{
+			_pageButtons[i].Disabled = IsBlocked;
 		}
 	}
 
@@ -412,7 +456,7 @@ public partial class BuildMenu : Control
 			// Room for two wrapped lines whatever width it is measured at, so the
 			// panel's minimum height cannot depend on when it was first laid out.
 			CustomMinimumSize = new Vector2(0f, 44f),
-			Modulate = new Color(0.82f, 0.85f, 0.9f),
+			Modulate = HintColor,
 		};
 		bottom.AddChild(_costHint);
 	}

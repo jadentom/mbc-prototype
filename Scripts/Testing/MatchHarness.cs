@@ -229,15 +229,19 @@ public partial class MatchHarness : Node
 	private void SubmitPlayerAction()
 	{
 		Combatant seat = _match.ActiveCombatant;
-		IReadOnlyList<UnitDefinition> buildable = _match.Catalog?.Buildable;
-		if (seat == null || buildable == null || buildable.Count == 0)
+		if (seat == null || _match.Catalog == null)
 		{
 			_match.SkipTurn();
 			return;
 		}
 
+		// It fires from its nearest launcher, so the roster it picks from is that
+		// launcher's own subset rather than the catalog's whole list.
 		Structure origin = NearestOwnLauncher(seat, out Structure target);
-		UnitDefinition unit = ChooseAffordable(seat, buildable);
+		IReadOnlyList<UnitDefinition> buildable = origin == null
+			? null
+			: _match.Catalog.LaunchableFrom(origin.Definition);
+		UnitDefinition unit = buildable == null ? null : ChooseAffordable(seat, buildable);
 		if (origin == null || unit == null)
 		{
 			_match.SkipTurn();

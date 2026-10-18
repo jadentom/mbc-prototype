@@ -73,10 +73,13 @@ public partial class EnemyCombatant : NodeChainCombatant
 			return;
 		}
 
-		IReadOnlyList<UnitDefinition> buildable = GameManager.Instance?.Catalog?.Buildable;
+		// What the structure it is firing from may actually launch, not the whole
+		// roster: a launcher with a subset only has that subset to plan from
+		// (docs/parity §2 — the launcher's own resource says what it fires).
+		IReadOnlyList<UnitDefinition> buildable = GameManager.Instance?.Catalog?.LaunchableFrom(origin.Definition);
 		if (buildable == null || buildable.Count == 0)
 		{
-			GD.PushError("EnemyCombatant: no buildable units in the match's catalog — nothing to launch.");
+			GD.Print($"[Enemy] {DisplayName}: nothing to fire from {origin.Definition?.DisplayName ?? "that structure"} — skipping the rest of the round.");
 			SubmitSkip();
 			return;
 		}

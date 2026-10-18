@@ -172,6 +172,8 @@ public partial class Structure : StaticBody3D
 		_highlight = GetNode<MeshInstance3D>("HighlightRing");
 		_highlight.Visible = false;
 
+		ApplySilhouette();
+
 		// In 3D, we use _InputEvent for mouse clicks on objects
 		InputEvent += OnInput;
 
@@ -231,6 +233,33 @@ public partial class Structure : StaticBody3D
 		}
 		GameManager.Instance?.UnregisterStructure(this);
 		base._ExitTree();
+	}
+
+	/// <summary>
+	/// Dresses this structure as the shape its unit's definition asks for (docs/parity
+	/// §2: a Harvester reads as a Harvester). The scene authors the ordinary disc,
+	/// so a unit that states nothing — or a structure with no definition at all —
+	/// keeps exactly the node it has always been drawn as; the plates are built by
+	/// <see cref="UnitSilhouettes"/> and all share the node's own footprint, so the
+	/// collision shape and the selection ring underneath are untouched.
+	/// </summary>
+	private void ApplySilhouette()
+	{
+		UnitSilhouette silhouette = Definition?.Silhouette ?? UnitSilhouette.Unset;
+
+		if (silhouette == UnitSilhouette.Unset)
+		{
+			if (Definition != null)
+			{
+				GD.PushWarning($"{Name}: '{Definition.Id}' states no silhouette — drawn as the ordinary disc.");
+			}
+			return;
+		}
+
+		var body = GetNodeOrNull<MeshInstance3D>("MeshInstance3D");
+		if (body == null) return;
+
+		body.Mesh = UnitSilhouettes.CreateMesh(silhouette);
 	}
 
 	/// <summary>Records a cord hanging from this structure (called by <see cref="Cord.Connect"/>).</summary>

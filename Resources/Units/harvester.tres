@@ -12,5 +12,6 @@ Traits = 17
 Level = 7
 HitPoints = 5
 CanBeBuilt = true
+Silhouette = 2
 Icon = ExtResource("1_harv1")
 ProjectileScene = ExtResource("2_harv2")

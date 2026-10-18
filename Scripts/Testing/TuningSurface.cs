@@ -156,6 +156,13 @@ public sealed class TuningSurface
 			// category headers come through the same list.
 			if ((usage & PropertyUsageFlags.ScriptVariable) == 0) continue;
 
+			// An enum is an authored choice (a unit's silhouette, its traits), not a
+			// number to slide: it would show up as a bare integer in the panel and in
+			// --tune, and moving it would change nothing already standing on the map.
+			if ((usage & PropertyUsageFlags.ClassIsEnum) != 0) continue;
+			var hint = (PropertyHint)(int)property["hint"];
+			if (hint == PropertyHint.Enum || hint == PropertyHint.Flags) continue;
+
 			var type = (Variant.Type)(int)property["type"];
 			if (type != Variant.Type.Float && type != Variant.Type.Int && type != Variant.Type.Bool) continue;
 
