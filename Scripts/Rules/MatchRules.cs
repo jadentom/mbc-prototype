@@ -107,6 +107,61 @@ public partial class MatchRules : Resource
 	[Export] public float ChargeSpeed = 0f;
 
 	// ------------------------------------------------------------------
+	// Energy, rounds and the turn clock (§7, M1)
+	//
+	// The energy economy is the match's, not a unit's: what a unit costs is its
+	// own Level, and how fast energy comes back is here. Negative means "not
+	// set" (see the class remarks); 0 is a real value for the incomes and for
+	// the clock ("this match pays no main-Hub income", "this match has no
+	// clock"), which is why those sentinels are negative rather than zero.
+	// ------------------------------------------------------------------
+
+	/// <summary>
+	/// Most energy a player may hold. The manual's 35; a number that will move
+	/// when the economy is tuned. Negative means "not set".
+	/// </summary>
+	[Export] public int MaxStoredEnergy = -1;
+
+	/// <summary>
+	/// Energy each player starts the match with, before any income. **A guess**
+	/// (docs/parity §7): the manual publishes income but not the opening purse.
+	/// Negative means "not set".
+	/// </summary>
+	[Export] public int StartingEnergy = -1;
+
+	/// <summary>
+	/// Energy the chain's **main Hub** pays its owner at the end of every round
+	/// (the manual's 7). Only the root structure pays it: a Hub built outward
+	/// builds but does not generate, which is the original's rule
+	/// ([units.md](../../docs/parity/units.md)). Negative means "not set".
+	/// </summary>
+	[Export] public int MainHubIncome = -1;
+
+	/// <summary>
+	/// Energy each Harvester standing on an energy pool pays at the end of a
+	/// round (the manual's 3). Negative means "not set".
+	/// </summary>
+	[Export] public int HarvesterIncomeOnPool = -1;
+
+	/// <summary>
+	/// Energy each Harvester standing on ordinary ground pays at the end of a
+	/// round (the manual's 1). Negative means "not set".
+	/// </summary>
+	[Export] public int HarvesterIncomeOffPool = -1;
+
+	/// <summary>
+	/// Seconds a player has for one turn before the turn is ended for them, or
+	/// zero for a match with no clock. The manual's default is 60 s. **A guess**
+	/// about how the clock is enforced, not about the number: the original's
+	/// clock is a per-move limit, and this milestone ends the turn when it runs
+	/// out rather than forfeiting anything else.
+	///
+	/// Negative means "not set"; unlike the incomes, zero here is meaningful
+	/// (a match played without a clock), so the sentinel has to be negative.
+	/// </summary>
+	[Export(PropertyHint.Range, "-1,600,1")] public float TurnClockSeconds = -1f;
+
+	// ------------------------------------------------------------------
 	// Fallbacks for a match with no content at all (§2)
 	//
 	// These exist so that a match whose rules resource was never assigned still
@@ -137,6 +192,24 @@ public partial class MatchRules : Resource
 	/// <summary>Charge speed used when nothing is set (a full charge in one second).</summary>
 	public const float FallbackChargeSpeed = 1f;
 
+	/// <summary>Energy cap used when nothing is set: the manual's maximum.</summary>
+	public const int FallbackMaxStoredEnergy = 35;
+
+	/// <summary>Starting energy used when nothing is set: one level-7 build.</summary>
+	public const int FallbackStartingEnergy = 7;
+
+	/// <summary>Main-Hub income used when nothing is set.</summary>
+	public const int FallbackMainHubIncome = 7;
+
+	/// <summary>Harvester income on a pool used when nothing is set.</summary>
+	public const int FallbackHarvesterIncomeOnPool = 3;
+
+	/// <summary>Harvester income off a pool used when nothing is set.</summary>
+	public const int FallbackHarvesterIncomeOffPool = 1;
+
+	/// <summary>Turn clock used when nothing is set: the manual's 60 s move.</summary>
+	public const float FallbackTurnClockSeconds = 60f;
+
 	/// <summary>
 	/// The rules a match runs on when no resource was assigned at all: nothing is
 	/// set, and every <c>Effective…</c> member below answers with its fallback.
@@ -157,6 +230,34 @@ public partial class MatchRules : Resource
 
 	/// <summary>Charge speed, as the simulation reads it.</summary>
 	public float EffectiveChargeSpeed => ChargeSpeed > 0f ? ChargeSpeed : FallbackChargeSpeed;
+
+	/// <summary>Energy cap, as the simulation reads it.</summary>
+	public int EffectiveMaxStoredEnergy => MaxStoredEnergy >= 0 ? MaxStoredEnergy : FallbackMaxStoredEnergy;
+
+	/// <summary>Starting energy, as the simulation reads it.</summary>
+	public int EffectiveStartingEnergy => StartingEnergy >= 0 ? StartingEnergy : FallbackStartingEnergy;
+
+	/// <summary>Main-Hub income, as the simulation reads it.</summary>
+	public int EffectiveMainHubIncome => MainHubIncome >= 0 ? MainHubIncome : FallbackMainHubIncome;
+
+	/// <summary>Harvester income on a pool, as the simulation reads it.</summary>
+	public int EffectiveHarvesterIncomeOnPool => HarvesterIncomeOnPool >= 0
+		? HarvesterIncomeOnPool
+		: FallbackHarvesterIncomeOnPool;
+
+	/// <summary>Harvester income off a pool, as the simulation reads it.</summary>
+	public int EffectiveHarvesterIncomeOffPool => HarvesterIncomeOffPool >= 0
+		? HarvesterIncomeOffPool
+		: FallbackHarvesterIncomeOffPool;
+
+	/// <summary>
+	/// How long a player's turn lasts, in seconds, as the simulation reads it.
+	/// Zero means the match has no clock.
+	/// </summary>
+	public float EffectiveTurnClockSeconds => TurnClockSeconds >= 0f ? TurnClockSeconds : FallbackTurnClockSeconds;
+
+	/// <summary>True when this match runs with a per-turn clock at all.</summary>
+	public bool HasTurnClock => EffectiveTurnClockSeconds > 0f;
 
 	/// <summary>
 	/// Reports a rule set that has not been filled in, so a missing number is
@@ -192,6 +293,30 @@ public partial class MatchRules : Resource
 		if (ChargeSpeed <= 0f)
 		{
 			GD.PushError("MatchRules: no charge speed set — the power meter cannot fill.");
+		}
+		if (MaxStoredEnergy < 0)
+		{
+			GD.PushError("MatchRules: no maximum stored energy set — the energy economy has no cap.");
+		}
+		if (StartingEnergy < 0)
+		{
+			GD.PushError("MatchRules: no starting energy set — neither seat can build in the first round.");
+		}
+		if (MaxStoredEnergy >= 0 && StartingEnergy > MaxStoredEnergy)
+		{
+			GD.PushError($"MatchRules: starting energy {StartingEnergy} exceeds the {MaxStoredEnergy} cap.");
+		}
+		if (MainHubIncome < 0)
+		{
+			GD.PushError("MatchRules: no main-Hub income set — a chain never earns anything.");
+		}
+		if (HarvesterIncomeOnPool < 0 || HarvesterIncomeOffPool < 0)
+		{
+			GD.PushError("MatchRules: Harvester income is unset — a Harvester earns nothing either way.");
+		}
+		if (TurnClockSeconds < 0f)
+		{
+			GD.PushError("MatchRules: the turn clock is unset — set seconds, or 0 for a match with no clock.");
 		}
 	}
 

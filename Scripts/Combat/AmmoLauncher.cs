@@ -40,24 +40,30 @@ public static class AmmoLauncher
 	/// <param name="aimAngleRadians">Aim angle, in the aim-indicator convention.</param>
 	/// <param name="powerPercent">Charge level, 0..1, mapped onto the min/max launch force.</param>
 	/// <param name="description">Turn-event description, for debug logs (null uses the unit's name).</param>
-	public static void Launch(UnitDefinition unit, Structure origin, float aimAngleRadians, float powerPercent, string description)
+	/// <returns>
+	/// True when the shot was fired and its turn event registered, false when
+	/// nothing left the launcher (no match, no definition, no scene, no
+	/// container). The caller charges for the build only on true, so a build that
+	/// could not happen costs nothing (docs/parity M1).
+	/// </returns>
+	public static bool Launch(UnitDefinition unit, Structure origin, float aimAngleRadians, float powerPercent, string description)
 	{
 		GameManager gm = GameManager.Instance;
-		if (gm == null) return;
+		if (gm == null) return false;
 
 		// A missing definition is a content error, not a silent no-op: nothing
 		// was launched, so the caller's turn has no event to wait for.
 		if (unit == null)
 		{
 			GD.PushError("AmmoLauncher: no unit definition to launch.");
-			return;
+			return false;
 		}
 		if (unit.ProjectileScene == null)
 		{
 			GD.PushError($"AmmoLauncher: unit '{unit.Id}' has no projectile scene to launch.");
-			return;
+			return false;
 		}
-		if (origin == null || !GodotObject.IsInstanceValid(origin) || origin.IsDestroyed) return;
+		if (origin == null || !GodotObject.IsInstanceValid(origin) || origin.IsDestroyed) return false;
 
 		// Every number the shot is made of comes from the match's rules and from
 		// the launcher's own definition (docs/parity §7): the force range, the
@@ -85,7 +91,7 @@ public static class AmmoLauncher
 		{
 			GD.PushError($"AmmoLauncher: {unit.ProjectileScene.ResourcePath} ('{unit.Id}') has no ILaunchedAmmo behaviour on its root — the shot cannot be configured.");
 			instance.QueueFree();
-			return;
+			return false;
 		}
 
 		ammo.Initialize(new AmmoLaunch(unit, rules, origin, velocity, turnEvent));
@@ -98,7 +104,7 @@ public static class AmmoLauncher
 		{
 			GD.PushError("AmmoLauncher: no container to parent the ammo under.");
 			instance.QueueFree();
-			return;
+			return false;
 		}
 		parent.AddChild(instance);
 
@@ -110,10 +116,11 @@ public static class AmmoLauncher
 		{
 			GD.PushError($"AmmoLauncher: '{unit.Id}' could not be added to {parent.Name} — the shot was not fired.");
 			instance.QueueFree();
-			return;
+			return false;
 		}
 
 		// Committing the turn: locks control until every event resolves.
 		gm.RegisterTurnEvent(turnEvent);
+		return true;
 	}
 }

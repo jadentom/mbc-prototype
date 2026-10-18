@@ -123,6 +123,15 @@ public partial class UnitDefinition : Resource
 	/// <summary>True when this unit damages what it strikes and what is near it.</summary>
 	public bool IsWeapon => Traits.HasFlag(UnitTraits.Weapon);
 
+	/// <summary>True when a structure of this unit's kind may launch units (the Hub, today).</summary>
+	public bool IsLauncher => Traits.HasFlag(UnitTraits.Launcher);
+
+	/// <summary>True when this structure is a chain's main Hub, and so generates the per-round income.</summary>
+	public bool IsHub => Traits.HasFlag(UnitTraits.Hub);
+
+	/// <summary>True when this structure generates energy at the end of a round, pool or no pool.</summary>
+	public bool IsHarvester => Traits.HasFlag(UnitTraits.Harvester);
+
 	/// <summary>True when this unit goes off over an area rather than at a point.</summary>
 	public bool HasBlast => OuterRadius > 0f;
 

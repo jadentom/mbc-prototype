@@ -1,5 +1,4 @@
 using Godot;
-using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
@@ -35,14 +34,6 @@ public partial class GameManager : Node
 	[Export] public bool EnableDevOverlay = true;
 
 	[ExportGroup("UI References")]
-	/// <summary>
-	/// The strip the HUD's unit icons are built into. The icons come from the
-	/// catalog at match start (see <see cref="BuildUnitIcons"/>) rather than from
-	/// the scene, so the units on screen and the units that can be launched are
-	/// the same list.
-	/// </summary>
-	[Export] public Control UnitIconBar;
-	[Export] public ColorRect SelectorBox;
 	[Export] public Label TurnLabel;
 	[Export] public Label DefeatLabel;
 	[Export] public Label VictoryLabel;
@@ -59,7 +50,7 @@ public partial class GameManager : Node
 
 	[ExportGroup("Content")]
 	/// <summary>
-	/// The roster this match draws from, and the units the HUD offers
+	/// The roster this match draws from, and the units the build menu offers
 	/// (docs/parity §2: unit data lives in resources, and there is one list of
 	/// it). Assigned in main_scene.tscn.
 	/// </summary>
@@ -67,7 +58,8 @@ public partial class GameManager : Node
 
 	/// <summary>
 	/// The match's global rules — the numbers that are not per-unit and not part
-	/// of the map (docs/parity §7). Assigned in main_scene.tscn.
+	/// of the map (docs/parity §7), including the energy economy and the turn
+	/// clock (M1). Assigned in main_scene.tscn.
 	/// </summary>
 	[Export] public MatchRules Rules;
 
@@ -81,7 +73,7 @@ public partial class GameManager : Node
 
 	/// <summary>
 	/// The map this match is fought on: its bounds, its pools and its start
-	/// positions (docs/parity §M0.4). Assigned in main_scene.tscn.
+	/// positions (docs/parity M0.4). Assigned in main_scene.tscn.
 	/// </summary>
 	[Export] public MapDefinition Map;
 
@@ -101,7 +93,7 @@ public partial class GameManager : Node
 	/// <summary>The match's view: the camera and the minimap.</summary>
 	public MatchCamera Camera { get; private set; }
 
-	/// <summary>The match's turn flow: rotation, turn events, round, outcome.</summary>
+	/// <summary>The match's turn flow: the rotation, turn events, the round, the outcome.</summary>
 	public TurnController Turns { get; private set; }
 
 	/// <summary>The match's content and combatants.</summary>
@@ -109,6 +101,13 @@ public partial class GameManager : Node
 
 	/// <summary>The developer overlay: the live tuning surface (docs/parity M0.7).</summary>
 	public DevOverlay Dev { get; private set; }
+
+	/// <summary>
+	/// The build menu (docs/parity M1): the pages, the unit buttons, the energy
+	/// readout and the turn clock. Built at match start from the roster, like the
+	/// minimap, and shown only for the human's turn.
+	/// </summary>
+	public BuildMenu Menu { get; private set; }
 
 	/// <summary>
 	/// The rules the simulation actually runs on (docs/parity §7): the assigned
@@ -145,13 +144,13 @@ public partial class GameManager : Node
 	/// <summary>Every combatant in the match, in seat order. Read by the AI for its targets.</summary>
 	public IReadOnlyList<Combatant> Combatants => Setup?.Combatants ?? System.Array.Empty<Combatant>();
 
-	/// <summary>The combatant whose turn it currently is (null before the match starts).</summary>
+	/// <summary>The combatant whose turn it currently is (null between turns).</summary>
 	public Combatant ActiveCombatant => Turns?.ActiveCombatant;
 
-	/// <summary>Current round number. Starts at 1 and advances when the rotation wraps.</summary>
+	/// <summary>The combatant whose turn it currently is (null between turns).</summary>
 	public int CurrentTurn => Turns?.Round ?? 1;
 
-	/// <summary>True while the player may aim / charge / select structures / fire.</summary>
+	/// <summary>True while the player may pick units, aim, charge and fire.</summary>
 	public bool IsPlayerTurn => Turns?.IsPlayerTurn ?? false;
 
 	/// <summary>True while a turn's events are still resolving (control is locked).</summary>
@@ -164,21 +163,19 @@ public partial class GameManager : Node
 	public PoolField Pools => World?.Pools;
 
 	/// <summary>The human's combatant: seat 0, the one the player drives.</summary>
-	private Combatant HumanCombatant => Setup?.HumanCombatant;
-
-	public Structure SelectedStructure;
+	public Combatant HumanCombatant => Setup?.HumanCombatant;
 
 	/// <summary>
-	/// The buildable units in catalog order, and the HUD icon built for each one.
-	/// The two lists are kept in step by <see cref="BuildUnitIcons"/>: the icon
-	/// the selector sits under is always the unit that would be fired, because
-	/// there is only one list of units.
+	/// True while the player is choosing what to build (the menu is up), false
+	/// while a chosen unit is being aimed (the launch view). A turn starts in the
+	/// build view and returns to it after every shot (docs/parity M1).
 	/// </summary>
-	private readonly List<UnitDefinition> _buildableUnits = new List<UnitDefinition>();
-	private readonly List<TextureRect> _unitIcons = new List<TextureRect>();
+	public bool IsBuildMode => _buildMode;
 
-	/// <summary>Which entry of <see cref="_buildableUnits"/> the player has selected.</summary>
-	private int _currentUnitIndex;
+	/// <summary>The unit being aimed in the launch view, or null in the build view.</summary>
+	public UnitDefinition ChosenUnit => _chosenUnit;
+
+	public Structure SelectedStructure;
 
 	/// <summary>
 	/// Container that spawned chain roots are parented under. A combatant may
@@ -226,10 +223,25 @@ public partial class GameManager : Node
 	/// </summary>
 	public int SimulationTicks { get; private set; }
 
-	/// <summary>The unit the player would fire right now (null when the roster is empty).</summary>
-	public UnitDefinition CurrentUnit => _currentUnitIndex >= 0 && _currentUnitIndex < _buildableUnits.Count
-		? _buildableUnits[_currentUnitIndex]
-		: null;
+	/// <summary>True in the build view (menu up) and false in the launch view (aiming).</summary>
+	private bool _buildMode = true;
+
+	/// <summary>The unit the player is aiming, or null in the build view.</summary>
+	private UnitDefinition _chosenUnit;
+
+	/// <summary>The page the build menu was last on, so a turn opens where the player left it.</summary>
+	private int _lastPage = 1;
+
+	/// <summary>Seconds left in the human's turn (docs/parity M1's turn clock).</summary>
+	private float _turnClock;
+
+	/// <summary>True when this match has a turn clock running for the human's seat.</summary>
+	private bool _clockRunning;
+
+	// The last energy readout shown, so the HUD only rebuilds when it changes.
+	private int _lastHudEnergy = int.MinValue;
+	private int _lastHudCap = int.MinValue;
+	private int _lastHudIncome = int.MinValue;
 
 	private float _currentAimAngle = 0f;
 	private MeshInstance3D _aimIndicator;
@@ -290,6 +302,10 @@ public partial class GameManager : Node
 		Turns = new TurnController { Name = "TurnController" };
 		AddChild(Turns);
 		Turns.TurnStarted += OnTurnStarted;
+		Turns.TurnResumed += OnTurnResumed;
+		Turns.TurnCommitted += OnTurnCommitted;
+		Turns.TurnEnded += OnTurnEnded;
+		Turns.RoundEnded += OnRoundEnded;
 		Turns.MatchEnded += OnMatchEnded;
 
 		CreateAimIndicator();
@@ -298,6 +314,18 @@ public partial class GameManager : Node
 			Name = "MatchSetup",
 		};
 		AddChild(Setup);
+
+		// The build menu is the HUD's answer to the energy budget (docs/parity
+		// M1). It is built here from the roster rather than authored in the scene,
+		// like the minimap: a unit in the catalog gets a button on its level's
+		// page without anyone editing the scene.
+		Menu = new BuildMenu();
+		UiLayer?.AddChild(Menu);
+		Menu.Build();
+		Menu.UnitChosen += TryBuild;
+		Menu.PageChosen += ChoosePage;
+		Menu.EndTurnRequested += SkipTurn;
+		Menu.CancelLaunchRequested += CancelLaunch;
 
 		if (PowerBar != null) PowerBar.Visible = false;
 		if (DefeatLabel != null) DefeatLabel.Visible = false;
@@ -318,10 +346,7 @@ public partial class GameManager : Node
 			Dev.Build(Catalog, ActiveRules, Profile, World?.Map);
 		}
 
-		// The HUD is built from the roster the setup resolved.
-		BuildUnitIcons();
-		_currentUnitIndex = 0;
-		UpdateUnitSelector();
+		UpdateHud();
 
 		// The first turn starts once the whole scene has finished setting up: the
 		// starting structures' _Ready (which builds their highlight rings and
@@ -329,102 +354,35 @@ public partial class GameManager : Node
 		GetTree().CreateTimer(0.0f).Timeout += () => Turns.Start(Setup.Combatants);
 	}
 
-	/// <summary>
-	/// Builds the HUD's unit strip from the catalog: one icon per buildable unit,
-	/// in roster order, under <see cref="UnitIconBar"/>. The strip is built rather
-	/// than authored so that adding a unit to the roster adds its icon, and a
-	/// second hand-maintained list of "what exists" cannot drift from the first.
-	/// </summary>
-	private void BuildUnitIcons()
-	{
-		_buildableUnits.Clear();
-		_unitIcons.Clear();
-
-		if (UnitIconBar == null || Catalog == null) return;
-
-		// Idempotent: whatever is in the bar goes first — the catalog is the only
-		// thing this bar is allowed to show.
-		foreach (Node child in UnitIconBar.GetChildren())
-		{
-			UnitIconBar.RemoveChild(child);
-			child.QueueFree();
-		}
-
-		foreach (UnitDefinition unit in Catalog.Buildable)
-		{
-			var icon = new TextureRect
-			{
-				Name = string.IsNullOrEmpty(unit.Id) ? "UnitIcon" : $"UnitIcon_{unit.Id}",
-				Texture = unit.Icon,
-				StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
-				SizeFlagsHorizontal = Control.SizeFlags.ShrinkBegin,
-				// The bar is a readout, not a control: clicks belong to the world.
-				MouseFilter = Control.MouseFilterEnum.Ignore,
-			};
-			UnitIconBar.AddChild(icon);
-			_buildableUnits.Add(unit);
-			_unitIcons.Add(icon);
-		}
-
-		GD.Print($"[Match] Unit strip: {_buildableUnits.Count} icon(s).");
-	}
-
-	/// <summary>
-	/// Moves the player's selection through the buildable units by
-	/// <paramref name="step"/>, wrapping at both ends.
-	/// </summary>
-	private void CycleUnit(int step)
-	{
-		if (_buildableUnits.Count == 0) return;
-
-		_currentUnitIndex = ((_currentUnitIndex + step) % _buildableUnits.Count + _buildableUnits.Count) % _buildableUnits.Count;
-		GD.Print($"Switched to: {CurrentUnit?.DisplayName}");
-		UpdateUnitSelector();
-	}
-
-	/// <summary>
-	/// Slides the HUD's selector box under the icon of the unit that would be
-	/// fired. Nothing to show means nothing to move: an empty roster leaves the
-	/// box where it is rather than tweening it to nowhere.
-	/// </summary>
-	private void UpdateUnitSelector()
-	{
-		if (SelectorBox == null) return;
-
-		// Determine which icon to highlight
-		TextureRect targetIcon = _currentUnitIndex >= 0 && _currentUnitIndex < _unitIcons.Count
-			? _unitIcons[_currentUnitIndex]
-			: null;
-		if (targetIcon == null) return;
-
-		// Smoothly move the selector box to the icon's position
-		Tween tween = GetTree().CreateTween();
-		tween.SetTrans(Tween.TransitionType.Back);
-		tween.SetEase(Tween.EaseType.Out);
-		
-		// We target the global_position of the icon
-		tween.TweenProperty(SelectorBox, "global_position", targetIcon.GlobalPosition, 0.2f);
-	}
-
 	private void CreateAimIndicator()
 	{
 		_aimIndicator = new MeshInstance3D();
-		
+
 		// Create a long thin box that looks like a pointer
 		var mesh = new BoxMesh { Size = new Vector3(0.2f, 0.2f, 2.0f) };
 		_aimIndicator.Mesh = mesh;
-		
+
 		// Bright yellow material so it stands out
-		var mat = new StandardMaterial3D { 
-			AlbedoColor = new Color(1, 1, 0), 
-			ShadingMode = StandardMaterial3D.ShadingModeEnum.Unshaded 
+		var mat = new StandardMaterial3D
+		{
+			AlbedoColor = new Color(1, 1, 0),
+			ShadingMode = StandardMaterial3D.ShadingModeEnum.Unshaded
 		};
 		_aimIndicator.MaterialOverride = mat;
-		
+
 		_aimIndicator.Visible = false;
 		AddChild(_aimIndicator);
 	}
 
+	/// <summary>
+	/// Selects one of the player's structures as the one to build from. A click on
+	/// the world, the turn start, and the fall-back after a destruction all land
+	/// here.
+	///
+	/// Selecting while a unit is being aimed returns to the build menu rather than
+	/// leaving the player aiming from a structure they did not choose: the launch
+	/// view belongs to one unit and one launcher.
+	/// </summary>
 	public void SelectStructure(Structure structure)
 	{
 		// No selecting while the turn's events are still resolving.
@@ -443,14 +401,16 @@ public partial class GameManager : Node
 		SelectedStructure = structure;
 		SelectedStructure.SetHighlight(true);
 
-		// Show indicator and move camera
-		_aimIndicator.Visible = true;
+		// Move the camera to the structure being built from.
 		Camera?.CenterOn(structure.GlobalPosition);
 
-		// Cancel charging if we switch nodes
+		// A new origin means a new shot: whatever was being charged is abandoned.
 		_isCharging = false;
 		_currentPowerPercent = 0f;
 		if (PowerBar != null) PowerBar.Visible = false;
+		HideAimIndicator();
+
+		if (!_buildMode) EnterBuildMode(HumanCombatant);
 	}
 
 	/// <summary>
@@ -480,30 +440,183 @@ public partial class GameManager : Node
 			{
 				RevertControlToHighestNode();
 			}
-			// During resolution the selection is re-established in CompleteTurn().
+			// During resolution the selection is re-established in OnTurnResumed().
 			return;
 		}
 
-		if (!IsPlayerTurn || SelectedStructure == null) return;
+		// The turn clock ticks only while the player can actually act: it pauses
+		// while a shot resolves, and does not run for a replayed match.
+		if (TickTurnClock((float)delta)) return;
 
-		// While the tamper panel is open it owns the keyboard: aiming and charging
-		// are read from the Input singleton, which does not know an event was
-		// handled, so a designer stepping through a tunable would otherwise be
-		// swinging the aim at the same time (docs/parity M0.7).
+		// While the tamper panel is open it owns the keyboard: the menu, aiming
+		// and charging are read from the Input singleton, which does not know an
+		// event was handled, so a designer stepping through a tunable would
+		// otherwise be playing at the same time (docs/parity M0.7).
 		if (Dev != null && Dev.IsOpen) return;
+		if (!IsPlayerTurn || IsReplaying || IsResolvingTurn) return;
 
-		HandleAiming((float)delta);
-		HandleFiringLogic((float)delta);
+		if (_buildMode)
+		{
+			HandleBuildInput();
+		}
+		else
+		{
+			if (Input.IsActionJustPressed("cancel_launch"))
+			{
+				CancelLaunch();
+				return;
+			}
+			HandleAiming((float)delta);
+			HandleFiringLogic((float)delta);
+		}
+
+		if (Menu != null && Menu.IsShowing) UpdateHud();
+	}
+
+	// ------------------------------------------------------------------
+	// The player's turn: the build menu and the launch view (docs/parity M1)
+	// ------------------------------------------------------------------
+
+	/// <summary>
+	/// Starts the human's part of a turn: make sure there is a launcher to build
+	/// from, open the menu — or, when the energy cannot pay for anything, end the
+	/// turn rather than sitting on a menu with nothing usable on it.
+	/// </summary>
+	private void BeginPlayerTurn(Combatant combatant)
+	{
+		_buildMode = true;
+		_chosenUnit = null;
+
+		EnsurePlayerOrigin(combatant);
+
+		if (!CanBuildAnything(combatant))
+		{
+			GD.Print($"[Round {CurrentTurn}] {combatant.DisplayName}: {combatant.Energy} energy buys nothing — ending the turn.");
+			SkipTurn();
+			return;
+		}
+
+		EnterBuildMode(combatant);
+	}
+
+	/// <summary>
+	/// Makes sure the selected structure is a live launcher of this combatant,
+	/// falling back to the root Hub when it is not (the selection may have been
+	/// destroyed during the last resolution).
+	/// </summary>
+	private void EnsurePlayerOrigin(Combatant combatant)
+	{
+		bool usable = SelectedStructure != null
+			&& IsInstanceValid(SelectedStructure)
+			&& !SelectedStructure.IsDestroyed
+			&& SelectedStructure.OwnerChain == combatant
+			&& IsLauncher(SelectedStructure);
+		if (usable) return;
+
+		Structure root = (combatant as NodeChainCombatant)?.FindRootStructure();
+		if (root != null) SelectStructure(root);
+	}
+
+	/// <summary>Opens the build menu for the pot of energy the player is holding.</summary>
+	private void EnterBuildMode(Combatant combatant)
+	{
+		_buildMode = true;
+		_chosenUnit = null;
+		_isCharging = false;
+		_currentPowerPercent = 0f;
+		if (PowerBar != null) PowerBar.Visible = false;
+		HideAimIndicator();
+
+		if (combatant != null && Menu != null)
+		{
+			Menu.ShowBuild(
+				Catalog?.Buildable ?? System.Array.Empty<UnitDefinition>(),
+				combatant.Energy,
+				combatant.MaxEnergy,
+				IncomeOf(combatant),
+				_lastPage);
+			_lastPage = Menu.Page;
+		}
+
+		UpdateHud();
+	}
+
+	/// <summary>Leaves the menu and aims the chosen unit: the power meter takes over.</summary>
+	private void EnterLaunchMode()
+	{
+		_buildMode = false;
+		_isCharging = false;
+		_currentPowerPercent = 0f;
+		_isChargingUp = true;
+
+		Menu?.ShowLaunch(_chosenUnit);
+		Menu?.SetPower(0f);
+		if (PowerBar != null)
+		{
+			PowerBar.Visible = true;
+			PowerBar.Value = 0d;
+		}
+		ShowAimPreview(SelectedStructure, _currentAimAngle, 0f);
+	}
+
+	/// <summary>
+	/// Abandons the shot being aimed and returns to the menu. The unit was never
+	/// launched, so nothing was spent: cancelling costs the player nothing but the
+	/// time spent aiming.
+	/// </summary>
+	public void CancelLaunch()
+	{
+		if (!IsPlayerTurn || _buildMode) return;
+
+		EnterBuildMode(ActiveCombatant);
+	}
+
+	/// <summary>Asks to build <paramref name="unit"/> from the selected structure.</summary>
+	private void TryBuild(UnitDefinition unit)
+	{
+		if (!IsPlayerTurn || !_buildMode || unit == null) return;
+
+		Combatant actor = ActiveCombatant;
+		if (actor == null) return;
+
+		if (!IsLauncher(SelectedStructure))
+		{
+			GD.Print($"[Build] {SelectedStructure?.Definition?.DisplayName ?? "That structure"} cannot launch units — only a Hub can.");
+			return;
+		}
+		if (!actor.CanAfford(unit.Level))
+		{
+			GD.Print($"[Build] {unit.DisplayName} costs {unit.Level} energy; {actor.DisplayName} has {actor.Energy}.");
+			return;
+		}
+
+		_chosenUnit = unit;
+		EnterLaunchMode();
+	}
+
+	/// <summary>Switches the build menu to the page for <paramref name="level"/>.</summary>
+	private void ChoosePage(int level)
+	{
+		if (!IsPlayerTurn || !_buildMode || Menu == null) return;
+		if (Menu.SetPage(level)) _lastPage = Menu.Page;
+	}
+
+	/// <summary>The keyboard half of the build menu: pages, the unit cursor, end turn.</summary>
+	private void HandleBuildInput()
+	{
+		if (Input.IsActionJustPressed("build_page_1")) ChoosePage(1);
+		if (Input.IsActionJustPressed("build_page_3")) ChoosePage(3);
+		if (Input.IsActionJustPressed("build_page_7")) ChoosePage(7);
+		if (Input.IsActionJustPressed("switch_ammo_next")) Menu?.MoveCursor(1);
+		if (Input.IsActionJustPressed("switch_ammo_previous")) Menu?.MoveCursor(-1);
+		if (Input.IsActionJustPressed("choose_unit")) TryBuild(Menu?.CursorUnit);
+		if (Input.IsActionJustPressed("end_turn")) SkipTurn();
 	}
 
 	private void HandleAiming(float delta)
 	{
 		float input = Input.GetAxis("aim_left", "aim_right");
 		_currentAimAngle += input * ActiveRules.EffectiveAimRotationSpeed * delta;
-
-		// Switch the unit to launch with Q or E.
-		if (Input.IsActionJustPressed("switch_ammo_next")) CycleUnit(1);
-		if (Input.IsActionJustPressed("switch_ammo_previous")) CycleUnit(-1);
 
 		ShowAimPreview(SelectedStructure, _currentAimAngle, _currentPowerPercent);
 	}
@@ -569,8 +682,9 @@ public partial class GameManager : Node
 			{
 				_isChargingUp = true;
 			}
-			
+
 			if (PowerBar != null) PowerBar.Value = _currentPowerPercent;
+			Menu?.SetPower(_currentPowerPercent);
 
 			// Optional: Scale the indicator arrow to show power visually in 3D
 			_aimIndicator.Scale = new Vector3(1, 1, 1 + (_currentPowerPercent * 2f));
@@ -581,27 +695,94 @@ public partial class GameManager : Node
 		{
 			_isChargingUp = true;
 			Fire(_currentPowerPercent);
-			
+
 			// Reset
 			_isCharging = false;
 			_currentPowerPercent = 0f;
 			if (PowerBar != null) PowerBar.Visible = false;
 			_aimIndicator.Scale = Vector3.One;
+
+			if (IsResolvingTurn)
+			{
+				// The shot is in the air: the menu stays out of the way until it
+				// resolves, and the turn resumes with whatever energy is left.
+				Menu?.HidePanels();
+				HideAimIndicator();
+			}
+			else
+			{
+				// Nothing went out (the build was refused): back to the menu
+				// rather than sitting on a launch view with no shot in it.
+				EnterBuildMode(ActiveCombatant);
+			}
 		}
 	}
 
 	/// <summary>
-	/// Fires the currently selected unit along the player's current aim. Uses
-	/// the exact same launch path as every AI combatant.
+	/// Fires the unit chosen in the menu along the player's current aim. Uses the
+	/// exact same launch path as every AI combatant.
 	/// </summary>
 	/// <param name="powerPercent">Charge level, 0..1, mapped onto the launch force range.</param>
 	private void Fire(float powerPercent)
 	{
-		UnitDefinition unit = CurrentUnit;
-		if (ActiveCombatant == null || SelectedStructure == null || unit == null) return;
+		Combatant actor = ActiveCombatant;
+		UnitDefinition unit = _chosenUnit;
+		if (actor == null || unit == null || SelectedStructure == null) return;
+		if (!IsLauncher(SelectedStructure)) return;
+		if (!actor.CanAfford(unit.Level)) return;
 
-		SubmitCommand(MatchCommand.Launch(
-			ActiveCombatant.Seat, unit.Id, SelectedStructure.Id, _currentAimAngle, powerPercent));
+		SubmitCommand(MatchCommand.Launch(actor.Seat, unit.Id, SelectedStructure.Id, _currentAimAngle, powerPercent));
+	}
+
+	// ------------------------------------------------------------------
+	// The turn clock (docs/parity M1, §7)
+	// ------------------------------------------------------------------
+
+	/// <summary>
+	/// Starts the human's turn clock from the rules. A clock of zero means the
+	/// match has none, and the HUD says so by showing nothing.
+	/// </summary>
+	private void ResetTurnClock()
+	{
+		MatchRules rules = ActiveRules;
+		_clockRunning = rules != null && rules.HasTurnClock;
+		_turnClock = rules?.EffectiveTurnClockSeconds ?? 0f;
+		Menu?.SetClock(_turnClock, _clockRunning);
+	}
+
+	/// <summary>
+	/// Runs the clock down for the time the player can act, and ends the turn
+	/// when it hits zero. Returns true when the turn was ended.
+	///
+	/// The clock **pauses while a shot resolves** (the player cannot act, so it
+	/// would be charging them for the game's own animation) and **does not run in
+	/// a replay** (the recorded log already decides when the turn ended, and a
+	/// clock running during a fast replay would turn matches into timeouts).
+	/// The expiry is a <see cref="CommandKind.Skip"/> command, so the log records
+	/// it and the replay ends the turn at exactly the same point.
+	/// </summary>
+	private bool TickTurnClock(float delta)
+	{
+		if (!_clockRunning)
+		{
+			Menu?.SetClock(0f, false);
+			return false;
+		}
+
+		// A developer with the tuning panel open is not playing: the clock must not
+		// cost them the turn while they move a number (docs/parity M0.7).
+		if (!IsPlayerTurn || IsResolvingTurn || IsReplaying || ActiveCombatant == null) return false;
+		if (Dev != null && Dev.IsOpen) return false;
+
+		_turnClock = Mathf.Max(0f, _turnClock - delta);
+		Menu?.SetClock(_turnClock, true);
+
+		if (_turnClock > 0f) return false;
+
+		_clockRunning = false;
+		GD.Print($"[Round {CurrentTurn}] Turn clock ran out — ending the turn.");
+		SkipTurn();
+		return true;
 	}
 
 	// ------------------------------------------------------------------
@@ -609,10 +790,10 @@ public partial class GameManager : Node
 	// ------------------------------------------------------------------
 
 	/// <summary>
-	/// The rotation has given a seat its turn (docs/parity M0.6). Who acts is
+	/// The rotation has given a seat its turn (docs/parity M0.6, M1). Who acts is
 	/// decided here and nowhere else: a replayed command log, the human's input, or
 	/// the combatant's own brain. The turn controller deliberately has no opinion —
-	/// it announces the turn and waits for the next event.
+	/// it announces the turn and waits for a command.
 	/// </summary>
 	private void OnTurnStarted(Combatant combatant)
 	{
@@ -624,40 +805,63 @@ public partial class GameManager : Node
 			// (docs/parity M0.5).
 			Turns.IsPlayerTurn = false;
 			HideAimIndicator();
+			Menu?.HidePanels();
 			FollowActingCombatant(combatant);
-			PlayNextReplayCommand(combatant);
 			UpdateTurnLabel();
+			PlayNextReplayCommand(combatant);
 			return;
 		}
 
 		if (combatant.IsPlayerControlled)
 		{
 			Turns.IsPlayerTurn = true;
-
-			// Note: a destroyed structure may still be a "valid" instance at this
-			// point (QueueFree removes it at the end of the frame), so check the
-			// IsDestroyed flag rather than IsInstanceValid alone.
-			bool selectionSurvived = SelectedStructure != null
-				&& IsInstanceValid(SelectedStructure)
-				&& !SelectedStructure.IsDestroyed
-				&& SelectedStructure.OwnerChain == combatant;
-
-			Structure target = selectionSurvived ? SelectedStructure : HumanChain?.FindRootStructure();
-			SelectStructure(target);
-			GD.Print($"[Turn {CurrentTurn}] {combatant.DisplayName}: move.");
+			ResetTurnClock();
+			GD.Print($"[Round {CurrentTurn}] {combatant.DisplayName}: turn with {combatant.Energy} energy.");
+			BeginPlayerTurn(combatant);
 		}
 		else
 		{
 			// No input for this combatant — it acts on its own from here.
 			Turns.IsPlayerTurn = false;
 			HideAimIndicator();
+			Menu?.HidePanels();
 			FollowActingCombatant(combatant);
 
-			GD.Print($"[Turn {CurrentTurn}] {combatant.DisplayName}: move.");
+			GD.Print($"[Round {CurrentTurn}] {combatant.DisplayName}: turn with {combatant.Energy} energy.");
 			combatant.BeginTurn();
 		}
 
 		UpdateTurnLabel();
+		UpdateHud();
+	}
+
+	/// <summary>
+	/// The shot a turn registered has resolved: the same seat may act again from
+	/// its remaining energy (docs/parity M1). This is *not* a new turn, so the
+	/// turn clock keeps going rather than restarting.
+	/// </summary>
+	private void OnTurnResumed(Combatant combatant)
+	{
+		if (combatant == null) return;
+
+		if (IsReplaying)
+		{
+			PlayNextReplayCommand(combatant);
+			return;
+		}
+
+		if (combatant.IsPlayerControlled)
+		{
+			Turns.IsPlayerTurn = true;
+			BeginPlayerTurn(combatant);
+		}
+		else
+		{
+			combatant.BeginTurn();
+		}
+
+		UpdateTurnLabel();
+		UpdateHud();
 	}
 
 	/// <summary>
@@ -669,7 +873,34 @@ public partial class GameManager : Node
 		_isCharging = false;
 		_currentPowerPercent = 0f;
 		if (PowerBar != null) PowerBar.Visible = false;
-		if (_aimIndicator != null) _aimIndicator.Visible = false;
+		HideAimIndicator();
+		Menu?.HidePanels();
+	}
+
+	/// <summary>
+	/// The turn is over, however it ended: the menu and the aim arrow go with it.
+	/// </summary>
+	private void OnTurnEnded(Combatant combatant)
+	{
+		_isCharging = false;
+		_currentPowerPercent = 0f;
+		_clockRunning = false;
+		if (PowerBar != null) PowerBar.Visible = false;
+		HideAimIndicator();
+		Menu?.HidePanels();
+		UpdateTurnLabel();
+	}
+
+	/// <summary>
+	/// The round is ending: pay income to every seat (docs/parity M1). The
+	/// rotation announces it; the economy is the setup's, which is where the rules
+	/// and the combatants both live.
+	/// </summary>
+	private void OnRoundEnded(int round)
+	{
+		Setup?.GrantRoundIncome(World);
+		UpdateHud();
+		UpdateTurnLabel();
 	}
 
 	/// <summary>
@@ -680,7 +911,9 @@ public partial class GameManager : Node
 	{
 		SelectedStructure = null;
 		HideAimIndicator();
+		_clockRunning = false;
 		if (PowerBar != null) PowerBar.Visible = false;
+		Menu?.HidePanels();
 		if (RestartLabel != null) RestartLabel.Visible = true;
 
 		if (playerWon)
@@ -701,9 +934,9 @@ public partial class GameManager : Node
 	private NodeChainCombatant HumanChain => HumanCombatant as NodeChainCombatant;
 
 	/// <summary>
-	/// Registers an event that must resolve before the current turn ends, and
-	/// commits the turn when it is the first (docs/parity M0.5: a turn is not over
-	/// until its shot has landed).
+	/// Registers an event that must resolve before the acting seat may act again,
+	/// and commits the turn when it is the first (docs/parity M0.5: a turn is not
+	/// over until its shot has landed).
 	/// </summary>
 	public void RegisterTurnEvent(TurnEvent evt)
 	{
@@ -711,13 +944,17 @@ public partial class GameManager : Node
 	}
 
 	/// <summary>
-	/// Ends the active turn for a combatant that spent it without registering a
-	/// single event (a shot that could not be launched). Without this the rotation
-	/// would wait forever for events that are never coming.
+	/// Ends the acting seat's turn through the command log — the player's **Skip**
+	/// (Space, the clock running out, or nothing affordable left). It is recorded
+	/// like any other action, so a replay knows exactly where the turn ended and
+	/// which energy was carried forward (docs/parity M1).
 	/// </summary>
-	public void EndIdleTurn()
+	public void SkipTurn()
 	{
-		Turns?.EndIdleTurn();
+		Combatant actor = ActiveCombatant;
+		if (actor == null || IsGameOver || IsResolvingTurn || IsReplaying) return;
+
+		SubmitCommand(MatchCommand.Skip(actor.Seat));
 	}
 
 	/// <summary>
@@ -741,15 +978,25 @@ public partial class GameManager : Node
 	/// </summary>
 	public override void _UnhandledInput(InputEvent @event)
 	{
-		if (!IsGameOver || _restartRequested) return;
+		if (IsGameOver)
+		{
+			if (_restartRequested) return;
 
-		bool pressed = (@event is InputEventKey key && key.Pressed && !key.Echo)
-			|| (@event is InputEventMouseButton mouseButton && mouseButton.Pressed);
-		if (!pressed) return;
+			bool pressed = (@event is InputEventKey key && key.Pressed && !key.Echo)
+				|| (@event is InputEventMouseButton mouseButton && mouseButton.Pressed);
+			if (!pressed) return;
 
-		_restartRequested = true;
-		GD.Print("Restarting the match.");
-		GetTree().CreateTimer(0.0f).Timeout += () => GetTree().ReloadCurrentScene();
+			_restartRequested = true;
+			GD.Print("Restarting the match.");
+			GetTree().CreateTimer(0.0f).Timeout += () => GetTree().ReloadCurrentScene();
+			return;
+		}
+
+		// Right-click is the mouse's cancel for the launch view, matching Esc.
+		if (@event is InputEventMouseButton right && right.Pressed && right.ButtonIndex == MouseButton.Right)
+		{
+			if (IsPlayerTurn && !_buildMode) CancelLaunch();
+		}
 	}
 
 	/// <summary>
@@ -773,9 +1020,9 @@ public partial class GameManager : Node
 
 	/// <summary>
 	/// The one way anything in a match changes: record the action, then apply it
-	/// (docs/parity M0.5). Live play goes through here — the player's shots and the
-	/// AI's alike — so the log is a complete account of the match, and applying the
-	/// log is replaying it.
+	/// (docs/parity M0.5). Live play goes through here — the player's builds and
+	/// the AI's alike — so the log is a complete account of the match, and applying
+	/// the log is replaying it.
 	/// </summary>
 	public void SubmitCommand(MatchCommand command)
 	{
@@ -790,19 +1037,49 @@ public partial class GameManager : Node
 	/// make the log a lie.
 	///
 	/// A command that cannot be applied — a structure that is no longer there, a
-	/// unit the roster does not have — is reported and dropped, leaving the turn
-	/// to end normally rather than hanging the rotation.
+	/// unit the roster does not have, a launcher that cannot pay — is reported and
+	/// dropped, leaving the turn to end normally rather than hanging the rotation.
 	/// </summary>
 	public void ApplyCommand(MatchCommand command)
 	{
+		Combatant actor = FindCombatant(command.Seat);
+		if (actor == null)
+		{
+			GD.PushError($"GameManager: cannot apply {command.Describe()} — the match has no seat {command.Seat}.");
+			return;
+		}
+
+		// Only the seat whose turn it is may act. This is what makes a log a
+		// transcript rather than a pile of actions: replaying it applies every
+		// command on its owner's turn.
+		if (Turns?.ActiveCombatant == null || Turns.ActiveCombatant != actor)
+		{
+			GD.PushError($"GameManager: cannot apply {command.Describe()} — seat {actor.Seat} is not the seat acting.");
+			return;
+		}
+
 		switch (command.Kind)
 		{
+			case CommandKind.Skip:
+				Turns?.EndTurn();
+				return;
+
 			case CommandKind.Launch:
 			{
 				Structure origin = FindStructure(command.OriginStructureId);
 				if (origin == null)
 				{
 					GD.PushError($"GameManager: cannot apply {command.Describe()} — there is no live structure {command.OriginStructureId}.");
+					return;
+				}
+				if (origin.OwnerChain != actor)
+				{
+					GD.PushError($"GameManager: cannot apply {command.Describe()} — structure {origin.Id} is not seat {actor.Seat}'s.");
+					return;
+				}
+				if (!IsLauncher(origin))
+				{
+					GD.PushError($"GameManager: cannot apply {command.Describe()} — {origin.Definition?.DisplayName ?? "that structure"} cannot launch units.");
 					return;
 				}
 
@@ -812,9 +1089,28 @@ public partial class GameManager : Node
 					GD.PushError($"GameManager: cannot apply {command.Describe()} — the roster has no '{command.UnitId}'.");
 					return;
 				}
+				if (!unit.CanBeBuilt)
+				{
+					GD.PushError($"GameManager: cannot apply {command.Describe()} — '{unit.Id}' is not buildable in this match.");
+					return;
+				}
+				if (!actor.CanAfford(unit.Level))
+				{
+					GD.PushError($"GameManager: cannot apply {command.Describe()} — seat {actor.Seat} has {actor.Energy} energy and '{unit.Id}' costs {unit.Level}.");
+					return;
+				}
 
-				AmmoLauncher.Launch(unit, origin, command.AimAngleRadians, command.PowerPercent,
-					$"seat {command.Seat} {unit.DisplayName}");
+				// The launch is the expensive part and the only part that can still
+				// fail (a scene that will not load, a launcher that died this frame):
+				// charging for it only once it has happened keeps a failed build free.
+				if (!AmmoLauncher.Launch(unit, origin, command.AimAngleRadians, command.PowerPercent,
+					$"seat {command.Seat} {unit.DisplayName}"))
+				{
+					return;
+				}
+
+				actor.SpendEnergy(unit.Level);
+				UpdateHud();
 				return;
 			}
 
@@ -822,6 +1118,53 @@ public partial class GameManager : Node
 				GD.PushError($"GameManager: cannot apply a {command.Kind} command.");
 				return;
 		}
+	}
+
+	/// <summary>The combatant holding <paramref name="seat"/>, or null when the match has none.</summary>
+	public Combatant FindCombatant(int seat)
+	{
+		foreach (Combatant combatant in Combatants)
+		{
+			if (combatant != null && combatant.Seat == seat) return combatant;
+		}
+		return null;
+	}
+
+	/// <summary>True when <paramref name="structure"/> may launch units (docs/parity M1: only a launcher builds).</summary>
+	private static bool IsLauncher(Structure structure)
+	{
+		return structure != null && structure.Definition != null && structure.Definition.IsLauncher;
+	}
+
+	/// <summary>
+	/// True when <paramref name="combatant"/> can pay for at least one buildable
+	/// unit. A turn with nothing affordable ends itself: a budget that cannot buy
+	/// anything is a turn that is over (docs/parity M1's "spent out").
+	/// </summary>
+	public bool CanBuildAnything(Combatant combatant)
+	{
+		if (combatant == null) return false;
+
+		IReadOnlyList<UnitDefinition> buildable = Catalog?.Buildable;
+		if (buildable == null) return false;
+
+		foreach (UnitDefinition unit in buildable)
+		{
+			if (unit != null && unit.Level > 0 && combatant.CanAfford(unit.Level)) return true;
+		}
+		return false;
+	}
+
+	/// <summary>
+	/// What <paramref name="combatant"/> will be paid at the end of this round:
+	/// the main Hub plus its Harvesters, read live from the rules so the readout
+	/// and the payout never disagree (docs/parity M1, §7).
+	/// </summary>
+	public int IncomeOf(Combatant combatant)
+	{
+		return combatant is NodeChainCombatant chain
+			? chain.ComputeIncome(ActiveRules, Pools)
+			: 0;
 	}
 
 	/// <summary>
@@ -860,7 +1203,7 @@ public partial class GameManager : Node
 	/// <summary>
 	/// Hands the match a recorded log to play instead of taking input or letting
 	/// the AI decide (docs/parity M0.5). Each seat's turn takes the next logged
-	/// command for that seat, in order.
+	/// command for that seat, in order — a build, or the skip that ends the turn.
 	///
 	/// A log that does not fit the match — a command for a seat that is not acting,
 	/// a structure that is not there — ends the replay and says so, because a
@@ -886,41 +1229,65 @@ public partial class GameManager : Node
 	{
 		if (combatant == null) return;
 
-		if (_replayIndex >= _replay.Count)
+		// The log is the whole of what happened: play it until it asks for a shot
+		// (which has to resolve first), ends the turn, or runs out.
+		while (true)
 		{
-			GD.Print("[Replay] the log is spent — the match carries on by itself from here.");
-			_replay = null;
-			OnTurnStarted(combatant);
-			return;
+			if (_replay == null) return;
+
+			if (_replayIndex >= _replay.Count)
+			{
+				GD.Print("[Replay] the log is spent — the match carries on by itself from here.");
+				_replay = null;
+				OnTurnStarted(combatant);
+				return;
+			}
+
+			MatchCommand command = _replay[_replayIndex];
+			if (command.Seat != combatant.Seat)
+			{
+				GD.PushError($"[Replay] the log has {command.Describe()} next, but seat {combatant.Seat} ('{combatant.DisplayName}') "
+					+ "is the one acting — the log does not fit this match. Stopping the replay.");
+				_replay = null;
+				Turns?.EndTurn();
+				return;
+			}
+
+			_replayIndex++;
+			GD.Print($"[Round {CurrentTurn}] {combatant.DisplayName}: replaying {command.Describe()}.");
+			ApplyCommand(command);
+
+			// The shot has to land before the seat may act again — the rotation
+			// announces that with TurnResumed, which comes back here.
+			if (IsResolvingTurn) return;
+
+			// A skip has moved the match on to another seat's turn.
+			if (Turns?.ActiveCombatant != combatant) return;
+
+			// A command that registered no event left the turn open: take the log's
+			// next command for this seat, or end the turn when the log has moved on.
+			if (_replay == null) return;
+			if (_replayIndex >= _replay.Count) continue;
+			if (_replay[_replayIndex].Seat != combatant.Seat)
+			{
+				Turns?.EndTurn();
+				return;
+			}
 		}
-
-		MatchCommand command = _replay[_replayIndex];
-		if (command.Seat != combatant.Seat)
-		{
-			GD.PushError($"[Replay] the log has {command.Describe()} next, but seat {combatant.Seat} ('{combatant.DisplayName}') "
-				+ "is the one acting — the log does not fit this match. Stopping the replay.");
-			_replay = null;
-			Turns?.EndIdleTurn();
-			return;
-		}
-
-		_replayIndex++;
-		GD.Print($"[Turn {CurrentTurn}] {combatant.DisplayName}: replaying {command.Describe()}.");
-		ApplyCommand(command);
-
-		// A command that could not be applied registers no TurnEvent, and the
-		// rotation would wait for one forever.
-		if (!IsResolvingTurn) Turns?.EndIdleTurn();
 	}
 
 	/// <summary>
-	/// A fingerprint of the simulation: every live structure's id, unit, hit points,
-	/// parent and position (in id order), plus the round (docs/parity §6).
+	/// A fingerprint of the simulation: the round, the seed, every combatant's
+	/// energy, and every live structure's id, unit, hit points, parent and
+	/// position (in id order) — docs/parity §6.
 	///
 	/// Two runs of the same match — from the same seed and the same command log —
 	/// must produce the same hash. That is what turns "a replay is faithful" from a
-	/// claim into a test. Positions are rounded before hashing so the fingerprint is
-	/// about the simulation and not about the last bit of a float.
+	/// claim into a test, and since M1 it covers the energy economy too: a change
+	/// to the income or a cost that did not reach the simulation would leave the
+	/// same hash, and a change that did reach it moves this one. Positions are
+	/// rounded before hashing so the fingerprint is about the simulation and not
+	/// about the last bit of a float.
 	///
 	/// Take it between turns, while nothing is resolving: a destruction cascade in
 	/// flight is a state no two observers would catch at the same moment.
@@ -935,7 +1302,18 @@ public partial class GameManager : Node
 		structures.Sort((a, b) => a.Id.CompareTo(b.Id));
 
 		var text = new StringBuilder();
-		text.Append("turn=").Append(CurrentTurn).Append(";seed=").Append(Seed);
+		text.Append("round=").Append(CurrentTurn).Append(";seed=").Append(Seed);
+
+		// The energy economy is part of the state now: what each seat holds, and
+		// whether it is still in the match at all.
+		foreach (Combatant combatant in Combatants)
+		{
+			if (combatant == null) continue;
+			text.Append(";s").Append(combatant.Seat)
+				.Append(":e").Append(combatant.Energy)
+				.Append(":t").Append(combatant.Team);
+		}
+
 		foreach (Structure structure in structures)
 		{
 			Vector3 position = structure.GlobalPosition;
@@ -1010,24 +1388,32 @@ public partial class GameManager : Node
 
 		if (ActiveCombatant == null)
 		{
-			TurnLabel.Text = $"Turn {CurrentTurn}";
+			TurnLabel.Text = $"Round {CurrentTurn}";
 			return;
 		}
 
 		string whose = ActiveCombatant.IsPlayerControlled ? "your move" : $"{ActiveCombatant.DisplayName}'s move";
-		TurnLabel.Text = $"Turn {CurrentTurn} — {whose}";
+		TurnLabel.Text = $"Round {CurrentTurn} — {whose} — {ActiveCombatant.Energy} energy";
 	}
 
-	// ------------------------------------------------------------------
-	// Camera: minimap & screen-edge panning
-	// ------------------------------------------------------------------
-
 	/// <summary>
-	/// The region the minimap shows when the match has no map resource at all.
-	/// A fallback for running with no content (§2), never a map: the match will
-	/// have said so through <see cref="ResolveContent"/>, and this only keeps the
-	/// minimap and the pools from dividing by zero.
+	/// Puts the human's energy, its cap and the next round's income on the menu,
+	/// when any of them has changed. The income is recomputed live, so a Harvester
+	/// that has just been deployed shows up in the projection as soon as it lands.
 	/// </summary>
-	private const float FallbackWorldExtent = 100f;
+	private void UpdateHud()
+	{
+		Combatant human = HumanCombatant;
+		if (human == null || Menu == null) return;
 
+		int energy = human.Energy;
+		int cap = human.MaxEnergy;
+		int income = IncomeOf(human);
+		if (energy == _lastHudEnergy && cap == _lastHudCap && income == _lastHudIncome) return;
+
+		_lastHudEnergy = energy;
+		_lastHudCap = cap;
+		_lastHudIncome = income;
+		Menu.SetEnergy(energy, cap, income);
+	}
 }

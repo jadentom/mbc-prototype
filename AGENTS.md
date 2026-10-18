@@ -8,16 +8,24 @@ prototype built with **Godot 4.5.1 (C#/.NET)**. Read this before editing.
 - Engine: Godot 4.5.1 stable, GL Compatibility renderer, C# (.NET 8,
   `Godot.NET.Sdk/4.5.1`). Assembly name `MbcPrototype`.
 - Single scene: `Scenes/main_scene.tscn` (`res://`) — a 3D world where the
-  player and one AI enemy each control a chain of structures, aim, and launch
-  units from a roster, alternating turns. Turns resolve only after every
-  in-flight event completes.
+  player and one AI enemy each control a chain of structures, build from a
+  roster, and take turns. A shot resolves only after every in-flight event
+  completes.
+- **A turn is an energy budget** (docs/parity M1). Each seat holds energy (start
+  7, cap 35), spends it on builds — a unit's level *is* its cost, 1/3/7 — and may
+  keep building while it can pay. The turn ends when the seat **skips** (Space:
+  the rest of the energy carries forward) or when nothing in the roster is
+  affordable. A **round** is one turn from every seat; at its end the seats are
+  paid their income (main Hub 7, Harvesters 3 on a pool / 1 off it), and the
+  order **rotates left** so the seat that went first goes last next round. The
+  human has a per-turn clock (60 s) whose expiry is a recorded skip.
 - Both sides are the **same kind of thing** (`Combatant`): identical structures,
-  the same roster, the same launch path and the same defeat rule. The only
-  difference is where the aim and power come from (input vs. the AI). See
-  *Combatants & turns* below.
+  the same roster, the same launch path, the same energy economy and the same
+  defeat rule. The only difference is where the aim and power come from (input
+  vs. the AI). See *Combatants & turns* below.
 - Units are **data**: a `UnitDefinition` per unit in a `UnitCatalog` resource
-  (see *Unit data*). There are two today — `hub` and `bomb` — and adding a third
-  is a resource plus a behaviour, not a branch in the launcher.
+  (see *Unit data*). There are three today — `hub`, `harvester` and `bomb` — and
+  adding a fourth is a resource plus a behaviour, not a branch in the launcher.
 - **Every gameplay number is data** (docs/parity §2): unit numbers on their
   `UnitDefinition`, the match's globals on `MatchRules`, the world's on the
   `MapDefinition`, the enemy's on an `AiProfile`. No balance number belongs in a
@@ -70,12 +78,10 @@ World (Node3D)
 ├── Camera3D            # orthographic (projection=1), size=30, ~45° tilt
 ├── GameManager (Node)  # GameManager.cs — the main controller/singleton
 └── UI (CanvasLayer)
-    ├── FireStrengthBar (ProgressBar)      # bottom, full width
-    ├── Label                              # control hints
-    ├── Selector (ColorRect)               # unit-selector highlight
-    ├── HBoxContainer                      # unit icons, bottom-left — filled
-    │                                      #   at runtime from the catalog
-    ├── TurnLabel                          # top-right, round + whose move
+    ├── FireStrengthBar (ProgressBar)      # bottom, full width — the launch
+    │                                      #   power meter
+    ├── Label                              # control hints, top-left
+    ├── TurnLabel                          # top-right, round, whose move, energy
     ├── DefeatLabel                        # centered, hidden until defeat
     ├── VictoryLabel                       # centered, hidden until victory
     └── RestartLabel                       # centered, hidden until game over
@@ -97,40 +103,48 @@ The minimap is **built at runtime** by `MatchCamera.CreateMinimap()` (a
 `SubViewport` + top-down camera + `TextureRect` in the bottom-right corner),
 not stored in the scene. See [docs/camera](docs/camera/README.md).
 
+The **build menu** is built at runtime too, by `BuildMenu.Build()` from the
+catalog: the energy/clock strip, the `1`/`3`/`7` pages, the page's unit buttons
+and the End turn button, plus the launch view's unit/cost/power readout. A unit
+added to the roster therefore gets a button on its level's page with no scene
+edit, and a level with no unit gets no page. It is added under the scene's `UI`
+CanvasLayer, so the scene does not list it.
+
 ## Core scripts
 
 | File | Role |
 | --- | --- |
-| `Scripts/Core/GameManager.cs` | The match's entry point and **facade** (docs/parity M0.6): input and aiming/firing for the player, the HUD, selection, the command log and the structure registry. It builds the parts below in `_Ready` and forwards to them, which is why call sites still say `GameManager.Instance`. |
+| `Scripts/Core/GameManager.cs` | The match's entry point and **facade** (docs/parity M0.6): the player's build/launch input and the turn clock, the HUD, selection, the command log (including energy spending and skips) and the structure registry. It builds the parts below in `_Ready` and forwards to them, which is why call sites still say `GameManager.Instance`. |
 | `Scripts/Core/MatchSetup.cs` | **Builds the match**: resolves the roster/rules, settles the seed and the command log, and creates **one combatant per seat the map defines** (seat 0 is the human's, the rest are AI). Owns `Catalog`, `Rules`, `Seed`, `Random`, `Commands`, `Combatants`. |
-| `Scripts/TurnSystem/TurnController.cs` | **The turn flow**: the rotation, the pending `TurnEvent`s, the round counter, the outcome. It announces `TurnStarted`/`TurnCommitted`/`MatchEnded` and does not act for a seat — input, the AI or a replay does. |
+| `Scripts/TurnSystem/TurnController.cs` | **The turn flow** (M1: an energy budget, not one shot): the rotation, the round, the pending `TurnEvent`s and the outcome. It announces `TurnStarted`, `TurnResumed` (the same seat may build again), `TurnEnded`, `RoundEnded` and `MatchEnded`, and does not act for a seat — input, the AI or a replay does. |
+| `Scripts/Presentation/BuildMenu.cs` | **The build menu** (docs/parity M1): the pages, the unit buttons, the energy and next-round income, the turn clock, and the launch view's unit/cost/power readout. Built in code from the roster; it owns no match state and only reports what the player asked for. |
 | `Scripts/Presentation/MatchCamera.cs` | **The view**: centering, edge panning, and the whole minimap (widget, coordinates, structure markers, pool markers, connection lines). Read-only over the match: it is handed the structures each frame. |
 | `Scripts/World/MatchWorld.cs` | **The world**: the map it loaded, the bounds the minimap and the pools use, the pools themselves, and where each seat starts. |
-| `Scripts/Core/Structure.cs` | A unit on the map: hit points from its definition, highlight ring, health-bar SubViewport sprite (a divider line per point of health), the cords it hangs from and anchors, destruction cascade. Knows its owning `OwnerChain`. |
+| `Scripts/Core/Structure.cs` | A unit on the map: hit points from its definition, highlight ring, health-bar SubViewport sprite (a divider line per point of health), the cords it hangs from and anchors, destruction cascade, and the disabled state (`DisableFor`, the Harvester-income check; M4's EMP drives it). Knows its owning `OwnerChain`. |
 | `Scripts/Core/Cord.cs` | **The link in the network**: the geometry between two structures (parent, child, length) plus the cable mesh. Built by the child structure in `_Ready`, parented under it, and what the destruction cascade runs down. |
 | `Scripts/Core/PlayerCombatant.cs` | The human's combatant: a `NodeChainCombatant` whose aim/charge/fire comes from input in `GameManager`. |
-| `Scripts/TurnSystem/Combatant.cs` | Abstract turn participant (team, defeat rule, `BeginTurn`/`EndTurn`). The rotation only ever talks to this. |
-| `Scripts/TurnSystem/NodeChainCombatant.cs` | Combatant built from a chain of structures: structure registry, root lookup (`FindRootStructure()`, which follows the cords), defeat check, `Launch()`, and the `RootUnit` definition its root spawns with. |
-| `Scripts/Enemies/EnemyCombatant.cs` | The AI enemy: plans one action per turn (working through the catalog's buildable units), random aim/power, fires after its `Profile`'s think time. Every number it plays by is the profile's, not its own. |
+| `Scripts/TurnSystem/Combatant.cs` | Abstract turn participant (team, defeat rule, `BeginTurn`/`EndTurn`) **and the energy purse**: current energy, its cap from the rules, `CanAfford`/`SpendEnergy`, the round's income grant. The rotation only ever talks to this. |
+| `Scripts/TurnSystem/NodeChainCombatant.cs` | Combatant built from a chain of structures: structure registry, root lookup (`FindRootStructure()`, which follows the cords), defeat check, `Launch()`, `SubmitSkip()`, launcher lookup (`FindLauncherNearestTo`, `CanLaunchFrom`), the round's `ComputeIncome()` and the `RootUnit` definition its root spawns with. |
+| `Scripts/Enemies/EnemyCombatant.cs` | The AI enemy: spends its turn's energy like the player — plans the first affordable buildable unit (working through the roster), fires it after its `Profile`'s think time, plans the next when the shot resolves, and skips when nothing is affordable. Every number it plays by is the profile's, not its own. |
 | `Scripts/Units/UnitDefinition.cs` | **What a unit is**: the resource holding its numbers — level/energy cost, hit points, damage, blast radii, vision, build permission, icon, and the ammo scene. It replaces the old `AmmoType` enum. |
 | `Scripts/Units/UnitCatalog.cs` | The roster: the one list of units the HUD, the launcher and the AI read. `Find(id)`, `Buildable`, `Validate()`. |
-| `Scripts/Units/UnitTraits.cs` | `UnitTraits { Structure, Weapon }` — what a unit is, for code that does not know it by name. |
-| `Scripts/Rules/MatchRules.cs` | **The match's global numbers** (docs/parity §7): the blast falloff curve, the launch ballistics (gravity, force range, upward bias, muzzle height) and the aim/charge speeds. The exports are what a designer edits; the `Effective…` members are what the simulation reads, with the fallbacks a match with no rules at all needs. |
+| `Scripts/Units/UnitTraits.cs` | `UnitTraits { Structure, Weapon, Launcher, Hub, Harvester }` — what a unit is, for code that does not know it by name. |
+| `Scripts/Rules/MatchRules.cs` | (see *Tuning*) the match's global numbers: the blast curve, the ballistics, the aim/charge speeds, **the energy economy** (cap, starting purse, main-Hub and Harvester income) and **the turn clock**. |
 | `Scripts/Enemies/AiProfile.cs` | **How an AI plays** (§7): think time, aim spread, the power range it fires at. One resource read by the combatant itself — the four numbers used to be exported on `GameManager`, `MatchSetup` *and* `EnemyCombatant` at once. |
 | `Scripts/World/MapDefinition.cs` | **The map**: bounds, height field and terrain states, energy pools, and the start positions each seat of a match begins at. Builds its own `PoolField`. |
 | `Scripts/World/TerrainState.cs` | `TerrainState { Ground, Plateau, Mountain }` — three states, not the original's four: water is out of the first slice. |
-| `Scripts/Combat/AmmoLauncher.cs` | The single launch path for both sides: takes a `UnitDefinition`, instantiates its scene, hands it an `AmmoLaunch`, registers the `TurnEvent`. |
+| `Scripts/Combat/AmmoLauncher.cs` | The single launch path for both sides: takes a `UnitDefinition`, instantiates its scene, hands it an `AmmoLaunch`, registers the `TurnEvent`, and returns whether the shot happened (the match charges for a build only on true). |
 | `Scripts/Combat/ILaunchedAmmo.cs` | The behaviour interface every ammo scene's root implements — what replaced the launcher's `if (instance is Projectile) … else if (instance is Bomb)` chain. |
 | `Scripts/Combat/AmmoLaunch.cs` | The struct a shot is configured with: unit, match rules, origin, velocity, turn event. |
 | `Scripts/Combat/Projectile.cs` | Ammo: a ballistic body that deploys a `Structure` carrying its unit's definition where it lands, and resolves a `TurnEvent`. |
 | `Scripts/Combat/Bomb.cs` | Ammo: a ballistic body that detonates on contact and damages every `Structure` in its unit's blast radii (see *Unit data & the blast*), resolving a `TurnEvent`. |
 | `Scripts/Combat/BlastVisual.cs` | A blast's visuals: expanding translucent spheres over the damage radii, plus a ground marker (disc + a ring per radius) showing where they landed. Built in code, spawned by `Bomb`. |
-| `Scripts/TurnSystem/TurnEvent.cs` | One unit of turn resolution; the turn ends when all pending events resolve. |
+| `Scripts/TurnSystem/TurnEvent.cs` | One unit of turn resolution; control returns to the acting seat when all pending events resolve. |
 | `Scripts/World/PoolField.cs` | The map's purple pools: a fixed, grid-free scatter over the ground, one per-frame loop that pulses them all, and the pool queries future collision checks will use. |
 | `Scripts/World/PurplePool.cs` | One purple pool: a solid rounded square of energy with a rim of dead grass around it, pulsing between a resting violet and a bright glow. Knows its own footprint (`ContainsXZ`/`OverlapsXZ`). |
-| `Scripts/Simulation/MatchCommand.cs` | **One action, as data**: the seat, the unit id, the origin structure id, aim and power. Serializes to a dictionary; names things by id, never by reference. |
+| `Scripts/Simulation/MatchCommand.cs` | **One action, as data**: a `Launch` (seat, unit id, origin structure id, aim, power) or a `Skip` (seat only — end the turn, carry the energy). Serializes to a dictionary; names things by id, never by reference. |
 | `Scripts/Simulation/CommandLog.cs` | **The match's input**: every action in the order it was applied, with the seed and map, written and read as JSON. Applying is GameManager's job, not the log's. |
-| `Scripts/Testing/MatchHarness.cs` | The headless regression harness (`Scenes/harness.tscn`): plays a match with nobody at the keyboard, records its log, prints a state hash, and can replay a log and assert the hash. `--tune=target.Property=value` changes a number before the match runs. |
+| `Scripts/Testing/MatchHarness.cs` | The headless regression harness (`Scenes/harness.tscn`): plays a match with nobody at the keyboard, records its log, prints a state hash, and can replay a log and assert the hash. `--tune=target.Property=value` changes a number before the match runs; `--aim=pools` aims structure builds at pools (the Harvester income path). |
 | `Scripts/Testing/TuningSurface.cs` | **The tuning surface**: every number the match's resources export, read and written by name, saved back to the `.tres` files. Built by walking the resources' own property lists, so a number added to any of them shows up with no list to maintain. Drives both the overlay and `--tune`. |
 | `Scripts/Testing/DevOverlay.cs` | **The F1 dev overlay**: a panel over the tuning surface — arrows pick and change a number live, Enter writes it back to its resource, `R` re-reads the files. Built in code, and it owns the keyboard while it is open. |
 | `Shaders/CableShader.gdshader` | Visual cable between chained nodes. |
@@ -144,11 +158,15 @@ the seam every later unit depends on.
 
 ```
 Resources/Units/hub.tres            # Hub: level 7, 5 hit points, the launcher
-                                    #   (LaunchForceScale 1.0 — see *Tuning*)
+                                    #   and the main Hub (income) — Traits 13,
+                                    #   LaunchForceScale 1.0 (see *Tuning*)
+Resources/Units/harvester.tres      # Harvester: level 7, 5 hit points, energy
+                                    #   income — Traits 17 (Structure|Harvester)
 Resources/Units/bomb.tres           # Bomb: level 1, damage 3, radii 1.5 / 3.0
-Resources/Units/unit_catalog.tres   # the roster: hub, bomb (references, not copies)
+Resources/Units/unit_catalog.tres   # the roster: hub, harvester, bomb
+                                    #   (references, not copies)
 Resources/Rules/match_rules.tres    # the match's global numbers (blast curve,
-                                    #   ballistics, aim and charge speeds)
+                                    #   ballistics, aim/charge, energy, clock)
 Resources/AI/ai_profile.tres        # how the AI seats play (think, aim, power)
 ```
 
@@ -159,23 +177,36 @@ Resources/AI/ai_profile.tres        # how the AI seats play (think, aim, power)
   than swallowed.
 - A definition's `ProjectileScene` is its **behaviour**: that scene's root script
   implements `ILaunchedAmmo`, so the launcher configures it without knowing what
-  it is. `UnitTraits` (`Structure`, `Weapon`) is what *other* code branches on.
-- The HUD's unit strip is built from `Catalog.Buildable` at match start, in
-  roster order, so an icon and a unit can never disagree. Q/E (and the
-  `switch_ammo_next`/`switch_ammo_previous` actions) step through that list.
+  it is. `UnitTraits` (`Structure`, `Weapon`, `Launcher`, `Hub`, `Harvester`) is
+  what *other* code branches on — so a Harvester is a structure that pays income,
+  and only the Hub is a launcher, without anything testing for the id `"hub"`.
+- The build menu's pages and buttons are built from `Catalog.Buildable` (which
+  is rebuilt on every read, so a live `CanBeBuilt` change is obeyed), in roster
+  order and grouped by level, so an icon and a unit can never disagree.
+  `switch_ammo_next`/`switch_ammo_previous` (Q/E) move the menu's cursor.
 - **Adding a unit**: a new `.tres` referencing a new ammo scene, plus an entry in
-  `unit_catalog.tres`. Nothing in the launcher, the HUD or the turn code changes.
+  `unit_catalog.tres`. Nothing in the launcher, the HUD or the turn code changes
+  — its level becomes a page if that level is new, its cost is its level, and it
+  is affordable or not according to the player's energy.
+- **Income is a trait, the amounts are rules** (docs/parity M1, §7): a root
+  structure with the `Hub` trait pays `MatchRules.MainHubIncome`; every live
+  structure with the `Harvester` trait pays `HarvesterIncomeOnPool` or
+  `HarvesterIncomeOffPool` according to whether its centre stands in a pool, and
+  nothing while it is disabled. `NodeChainCombatant.ComputeIncome()` is the one
+  place that adds it up, and both the payout and the HUD's "next round +N" read
+  it, so the projection and the payment cannot disagree.
 - Godot does not write a value into a resource when it equals the script's
   default, so **a default must never be a real number**: `Level` defaults to 0
-  ("no level set") and `CanBeBuilt` to false, and the two shipped units state
+  ("no level set") and `CanBeBuilt` to false, and the three shipped units state
   their real values. A default that were a real cost would be the same number
   living in two places (§2). The same rule holds for `MatchRules`,
   `MapDefinition` and `AiProfile`, whose `Validate()` reports what is still
   unset — so an unset number is loud at match start, and the code fallbacks that
   keep the project running with no content are never a second opinion.
-- The `hub.tres`/`bomb.tres` split is also where hit points live (§M0.2): a
-  structure's hit points are its definition's `HitPoints`, and there is no longer
-  one number for every structure.
+- The `hub.tres`/`harvester.tres`/`bomb.tres` split is also where hit points live
+  (§M0.2): a structure's hit points are its definition's `HitPoints` (Hub 5,
+  Harvester 5; a Bomb has none), and there is no longer one number for every
+  structure.
 - **Reach is per launcher**: `LaunchForceScale` multiplies the match's force
   range, and `AmmoLauncher` reads it off the definition of the *structure it is
   firing from*, not off the ammo. A weapon never states one; the Hub states 1.0.
@@ -229,24 +260,35 @@ rotation, and `GameManager` decides who acts for each seat.
   match; `1v1` is what today's map says, not an assumption in the code (§1,
   *Built for expansion*). Adding a different *kind* of combatant means deriving
   from `Combatant` in there.
-- `TurnController.StartTurn()` announces `TurnStarted` and does nothing else.
-  `GameManager.OnTurnStarted()` decides who acts: a replayed command log, the
-  human's input (`IsPlayerTurn = true` and a fresh `SelectStructure()`), or the
-  combatant's own brain (camera on its action structure, then `BeginTurn()`).
+- **A seat's turn is an energy budget** (docs/parity M1). `TurnController.StartTurn()`
+  announces `TurnStarted`; the seat builds while it can pay; each build registers a
+  `TurnEvent`, and when the last one resolves the controller announces
+  `TurnResumed` — the **same** seat may build again. The turn ends only when a
+  `Skip` command is applied (`GameManager.SkipTurn()` submits it: Space, the clock
+  running out, or nothing affordable) — `EndTurn()` then advances the round order.
+  `GameManager.OnTurnStarted`/`OnTurnResumed` decide who acts: a replayed command
+  log, the human (`IsPlayerTurn = true`, a launcher selected, the menu open) or the
+  combatant's own brain (`BeginTurn()`).
 - `TurnController` also raises `TurnCommitted` (GameManager cancels a charge in
-  progress) and `MatchEnded` (GameManager shows the outcome labels).
-- `CompleteTurn()` runs when the pending-event list drains: it ends the acting
-  combatant's turn, evaluates the match, and otherwise queues the advance —
-  `QueueTurnAdvance()` defers `AdvanceTurn()` to idle time, because a turn can end
-  from inside `_ExitTree` where the tree is locked (see *Determinism*).
-- An AI combatant **must** either register a `TurnEvent` during its turn or
-  call `GameManager.EndIdleTurn()`, otherwise the rotation would wait forever.
+  progress and hides the menu), `TurnEnded` (the seat is done) and `MatchEnded`
+  (GameManager shows the outcome labels).
+- `OnEventResolved()` runs when the pending-event list drains: it evaluates the
+  match and otherwise queues the *resume*, and `EndTurnNow()` queues the *advance*.
+  Both are **deferred to idle time** (`QueueResume()`, `QueueAdvance()`), because
+  an event can resolve from inside `_ExitTree` where the tree is locked (see
+  *Determinism*).
+- `EndRound()` is reached when every seat in the round order has had its turn: it
+  raises `RoundEnded` (the match pays income), increments `Round`, rebuilds the
+  round order **rotated left by one seat** and starts the next round's first turn.
+- An AI combatant **must** either submit a build during its turn or submit a skip
+  (`NodeChainCombatant.SubmitSkip()`), otherwise the rotation would wait forever.
+  `BeginTurn()` is called for the AI at the turn start and after every resolution.
 - Win/lose: `TurnController.EvaluateOutcome()` ends the match when a whole
   `Team` has no combatant left that can act — `VICTORY` if only the player's team
   is left, `DEFEAT` otherwise. Because destroying a root cascades down its cords
   through the whole chain, "the enemy's root was destroyed" is exactly this check.
-- `CurrentTurn` counts **rounds** (it advances when the rotation wraps), and
-  the turn label shows the round plus whose move it is.
+- `CurrentTurn` counts **rounds** (it advances at the end of a round), and the
+  turn label shows the round, whose move it is and that seat's energy.
 - Game over: `_UnhandledInput` restarts the match on any key/click by
   reloading the scene (deferred by a frame, so the reload never runs from
   inside a node it is about to free).
@@ -274,12 +316,30 @@ Team/targeting details:
 
 ## Key mechanics & invariants
 
-- **Turn system**: the first event registered on the `TurnController` commits the turn
-  (`IsPlayerTurn=false`, `IsResolvingTurn=true`); control returns in
-  `CompleteTurn()` when the pending-event list drains. `Structure.Destroy()`
-  registers a `TurnEvent` resolved in `_ExitTree` so destruction cascades
-  finish before the turn ends. The cascade walks `ChildCords`: destroying a
-  structure destroys everything its cords anchor, one generation per second.
+- **Turn system**: the first event registered on the `TurnController` commits the
+  turn's resolution (`IsPlayerTurn=false`, `IsResolving=true`); control returns to
+  the same seat in `TurnResumed` when the pending-event list drains (M1). The turn
+  itself ends on a skip. `Structure.Destroy()` registers a `TurnEvent` resolved in
+  `_ExitTree` so destruction cascades finish before the seat acts again. The
+  cascade walks `ChildCords`: destroying a structure destroys everything its cords
+  anchor, one generation per second.
+- **Energy and the build**: a unit's `Level` *is* its cost (docs/parity M1, §7).
+  `GameManager.ApplyCommand()` is the only place energy is spent: it checks the
+  acting seat, the origin belongs to that seat and is a **launcher**, the unit is
+  buildable and affordable, launches it through `AmmoLauncher` (which returns
+  whether the shot happened), and only then calls `actor.SpendEnergy(unit.Level)`.
+  A build that could not happen costs nothing and is reported. Nothing may spend
+  energy or launch around that path.
+- **Nothing but a launcher builds.** `UnitTraits.Launcher` is on the Hub only, so a
+  Harvester — or any future structure without the flag — can stand in a chain but
+  cannot fire. The check is in `ApplyCommand` (the simulation) *and* in the menu's
+  `TryBuild`, so neither code nor a click can bypass it.
+- **Income runs at the round end** (`MatchSetup.GrantRoundIncome`, driven by
+  `RoundEnded`): a root `Hub` pays `MainHubIncome`, every live `Harvester` pays the
+  on-pool or off-pool amount by whether its centre is in a pool, and a disabled
+  Harvester pays nothing. Income is capped at `MaxStoredEnergy`, so unspent energy
+  carries forward only up to the cap. The HUD's "next round +N" is the same
+  `ComputeIncome()` call, so the projection cannot drift from the payout.
 - **Destruction**: `IsDestroyed` (set immediately) vs
   `IsInstanceValid` (still true until `QueueFree` takes effect at end of
   frame). Always check the flag, never just instance validity.
@@ -287,10 +347,20 @@ Team/targeting details:
   player's own chain, re-centers the camera via a tween, and manages the
   highlight. When the selection dies, control reverts to the player's chain root
   (the structure with no live cord above it).
+- **The player's turn is two views** (docs/parity M1). *Build*: the menu is up,
+  1/3/7 pick a page, Q/E move the unit cursor, Enter or a click chooses a unit
+  (`TryBuild` checks the launcher and the energy). *Launch*: the menu steps aside,
+  A/D aim, holding `fire_shot` (W/Up) charges the power meter, release fires; Esc,
+  right-click or the Cancel button go back to the menu without spending. After a
+  shot resolves the player is back in the build view with the energy left.
 - **Aiming**: `aim_left`/`aim_right` rotate `_currentAimAngle` (A/D + arrow
-  keys); `fire_shot` charges a power bar; release launches the current *unit*.
+  keys); `fire_shot` charges a power bar; release launches the chosen unit.
   The AI drives the same `_currentAimAngle`-equivalent through
   `ShowAimPreview()` and `AmmoLauncher`, so both sides shoot identically.
+- **The turn clock** (`MatchRules.TurnClockSeconds`, 0 = no clock) belongs to the
+  human's seat and starts at each of its turns. It *pauses while a shot resolves*
+  and does not run in a replay; when it runs out the match submits a skip, so the
+  expiry is in the command log and a replay ends the turn at the same point.
 - **Enemy tuning** is the `AiProfile` resource (`Resources/AI/ai_profile.tres`),
   read by the combatant itself: think time, aim spread (180° = fully random), and
   the power range it fires at. It used to be exported on three nodes at once —
@@ -350,21 +420,28 @@ possible, and it only holds if everything obeys four rules.
 
 Two consequences worth knowing before changing the turn flow:
 
-- **The rotation advances at idle time** (`QueueTurnAdvance()`), never on the
-  spot. A turn can end from inside a node's `_ExitTree` — a destruction event
-  resolves there — and the tree is locked while nodes are removed, so anything
-  the next turn spawns fails with "parent node is busy setting up children" and
-  leaves a turn that can never resolve. If you add work to a turn, do not
-  un-defer that call.
-- **What is not deterministic yet**: the AI's `ThinkTime` and the cascade's 1.0 s
-  per generation are wall-clock timers. They pace the match rather than change
-  its outcome (the world is frozen while a turn resolves), but they are why the
-  harness is run with `--fixed-fps 60`, and the cascade's pacing is M2's to fix.
+- **The rotation advances, and the same seat resumes, at idle time**
+  (`QueueAdvance()` / `QueueResume()`), never on the spot. Either can be triggered
+  from inside a node's `_ExitTree` — a destruction event resolves there — and the
+  tree is locked while nodes are removed, so anything the next turn spawns (a
+  replayed shot included) fails with "parent node is busy setting up children" and
+  leaves a turn that can never resolve. If you add work to a turn, do not un-defer
+  either call.
+- **What is not deterministic yet**: the AI's `ThinkTime`, the cascade's 1.0 s per
+  generation and the human's turn clock are wall-clock timers. The first two pace
+  the match rather than change its outcome (the world is frozen while a turn
+  resolves); the clock *does* decide when a turn ends, which is why its expiry is
+  submitted as a recorded skip and why it does not tick in a replay. They are why
+  the harness is run with `--fixed-fps 60`, and the cascade's pacing is M2's to
+  fix.
   Float determinism holds for one build on one platform; a state hash compares
   runs, not releases.
 
-`GameManager.StateHash()` fingerprints the live structures (id, unit, hit points,
-parent, position) in id order. Take it between turns, while nothing is resolving.
+`GameManager.StateHash()` fingerprints the round, the seed, each combatant's
+energy and team, then the live structures (id, unit, hit points, parent,
+position) in id order — so since M1 a replay also proves the energy economy (an
+income or cost change that never reached the simulation would leave the hash
+alone). Take it between turns, while nothing is resolving.
 
 ## Tuning: the resources, the overlay, and `--tune`
 
@@ -373,8 +450,8 @@ Four homes, and every number is in exactly one of them:
 
 | what | home |
 | --- | --- |
-| one unit: hit points, damage, blast radii, level/cost, vision, build permission, **reach** (`LaunchForceScale`) | its `UnitDefinition` |
-| the match: the blast falloff curve, the launch ballistics (gravity, force range, upward bias, muzzle height), the aim and charge speeds | `MatchRules` |
+| one unit: hit points, damage, blast radii, **level (= energy cost)**, vision, build permission, **reach** (`LaunchForceScale`) | its `UnitDefinition` |
+| the match: the blast falloff curve, the launch ballistics (gravity, force range, upward bias, muzzle height), the aim and charge speeds, **the energy economy** (cap, starting purse, main-Hub income, Harvester on/off-pool income) and **the turn clock** | `MatchRules` |
 | the world: bounds, the height field and per-state heights, pool size and coverage, start positions | the `MapDefinition` |
 | the AI: think time, aim spread, the power range it fires at | the `AiProfile` |
 
@@ -420,10 +497,29 @@ godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --replay=/tmp/m.
 # simulation (docs/parity §2's "edit, replay, compare")
 godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --replay=/tmp/m.json \
     --tune=bomb.Damage=6
+# the same for the economy: income and cost are numbers like any other
+godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --replay=/tmp/m.json \
+    --tune=rules.MainHubIncome=20
+godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --replay=/tmp/m.json \
+    --tune=harvester.Level=3
 # and, to keep the change, write it back into the .tres the way the overlay does
 godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --turns=1 \
     --tune=bomb.Damage=6 --save-tuning
 ```
+
+```sh
+# M1's exit-criteria run: Hub and Harvester only, aimed at pools so the
+# Harvester's on-pool income is exercised; the [Energy] lines are the ledger.
+godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --turns=4 --seed=7 \
+    --aim=pools --tune=bomb.CanBeBuilt=0 --tune=map.PoolCoverageFraction=0.3
+```
+
+The recorded match's state hash depends on the match's numbers and content, so
+an M1-era match is **not** expected to reproduce the M0 baseline
+(`c6cd89abf0971af6`, 10 rounds, seed 7): a turn is now several builds and the
+energy is part of the fingerprint. For reference, as of M1 the default 10-round,
+seed-7 match (the three shipped units) hashes to `2c6d2a00819b84b2`, and the
+Hub-and-Harvester run above to `14e62615617f13b9`; both replay to themselves.
 
 `--fixed-fps 60` paces the run by frames rather than by the wall clock: it is much
 faster, and the think-timers stop depending on real time. The harness exits
@@ -439,8 +535,10 @@ printed when one does not exist.
 ## Purple pools
 
 `MatchWorld.Build()` lays a fixed `PoolField` of `PurplePool`s over the map's
-ground at match start. Nothing reads a pool yet — they are decoration with
-a query API, and the collision checks they exist for are not written.
+ground at match start. Since M1 the **Harvester's income reads them** (a
+Harvester on a pool earns 3 a round, 1 off it — `NodeChainCombatant.ComputeIncome`
+asks `PoolField.IsInAnyPool` for the structure's centre); the other collision checks
+they exist for (landing, build legality) are still not written.
 
 - **The layout is fixed, not generated.** `PoolField.Scatter()` takes as many
   candidate positions as the coverage target asks for and keeps the ones with
@@ -517,13 +615,20 @@ read it before touching anything camera-related. In short:
 ## Input map (`project.godot`)
 
 - `fire_shot`: Up arrow, W — the arrow keys both aim (Left/Right) and launch
-  (Up), which is what the in-game hint means by "Arrow keys or WAD to launch".
-  Space is not bound to anything.
-- `aim_left`: A, Left arrow
-- `aim_right`: D, Right arrow
+  (Up). In the launch view: hold to charge the power meter, release to fire.
+- `aim_left`: A, Left arrow — `aim_right`: D, Right arrow (launch view only).
 - `switch_ammo_next`: E — `switch_ammo_previous`: Q. Despite the names (an
-  M0.1 leftover), these step through the catalog's buildable units, one at a
-  time and wrapping at both ends.
+  M0.1 leftover), these move the build menu's cursor through the units on the
+  page showing, wrapping at both ends.
+- `build_page_1`, `build_page_3`, `build_page_7`: the `1`/`3`/`7` keys — switch
+  the build menu to that level's page (the pages the roster has a unit at;
+  clicking the page buttons does the same).
+- `choose_unit`: Enter — build the unit under the menu cursor (it opens the
+  launch view). Clicking the unit's button does the same.
+- `end_turn`: Space — **skip**: end the turn and carry all unspent energy into
+  the next round (docs/parity M1). The menu also has an End turn button.
+- `cancel_launch`: Esc — leave the launch view without firing; right-click does
+  the same. Nothing is spent either way.
 - `dev_overlay`: F1 — opens the developer overlay (see *Tuning*). It is the only
   dev binding here: the panel's own keys (arrows, Enter, R, Esc) are read raw in
   `DevOverlay._Input` rather than through actions, so a dev tool does not consume

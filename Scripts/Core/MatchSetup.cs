@@ -171,15 +171,52 @@ public partial class MatchSetup : Node
 					Profile = Profile,
 				};
 
+			// The purse and its cap are the match's rules (docs/parity M1): the
+			// combatant reads them from here rather than carrying numbers of its
+			// own, so changing the economy is a resource edit.
+			combatant.Rules = Rules;
+			combatant.BeginMatch();
+
 			if (combatant is NodeChainCombatant chain) chain.StructureContainer = structureContainer;
 
 			AddChild(combatant);
 			_combatants.Add(combatant);
 
 			Structure root = (combatant as NodeChainCombatant)?.SpawnRoot(world?.SeatPosition(seat) ?? Vector3.Zero);
-			GD.Print($"[Match] Seat {seat} ({combatant.DisplayName}) starts at {root?.GlobalPosition}.");
+			GD.Print($"[Match] Seat {seat} ({combatant.DisplayName}) starts at {root?.GlobalPosition} with {combatant.Energy} energy.");
 		}
 
 		GD.Print($"[Match] {_combatants.Count} combatant(s) ready on {seats} seat(s).");
+	}
+
+	/// <summary>
+	/// Pays every seat its income for the round that just ended (docs/parity M1,
+	/// §7): the main Hub's, plus what each Harvester earns where it stands.
+	///
+	/// Called by the match when the turn controller announces the end of a round —
+	/// the rotation does not know what a Harvester is, and the economy does not
+	/// know whose turn it is. The rules are read here, every round, so a number
+	/// changed under a running match (the dev overlay, <c>--tune</c>) is felt at
+	/// the next payout rather than at the next build.
+	/// </summary>
+	/// <param name="world">The world the pools are on; null means bare ground.</param>
+	public void GrantRoundIncome(MatchWorld world)
+	{
+		foreach (Combatant combatant in _combatants)
+		{
+			if (combatant == null || combatant.IsDefeated) continue;
+
+			var breakdown = new List<string>();
+			int income = combatant is NodeChainCombatant chain
+				? chain.ComputeIncome(Rules, world?.Pools, breakdown)
+				: 0;
+			int spent = combatant.EnergySpentThisRound;
+			int granted = combatant.GrantIncome(income);
+			combatant.ResetRoundSpending();
+
+			string sources = breakdown.Count == 0 ? "nothing" : string.Join(", ", breakdown);
+			GD.Print($"[Energy] {combatant.DisplayName}: spent {spent}, income {income} ({sources}) "
+				+ $"granted {granted} → {combatant.Energy}/{combatant.MaxEnergy}.");
+		}
 	}
 }

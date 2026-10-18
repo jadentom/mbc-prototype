@@ -116,6 +116,35 @@ public partial class Structure : StaticBody3D
 	public int Health { get; private set; }
 
 	/// <summary>
+	/// Round at which a disable expires (see <see cref="DisableFor"/>); zero
+	/// means this structure has never been disabled.
+	/// </summary>
+	public int DisabledUntilRound { get; private set; }
+
+	/// <summary>
+	/// True while this structure is disabled: it keeps standing and keeps its
+	/// hit points, but does nothing. A disabled Harvester yields no income at
+	/// the end of the round it is disabled in (docs/parity M1, the original's
+	/// rule), and M4's EMP is what will make it happen; nothing disables a
+	/// structure today, so this is the rule waiting for its unit.
+	/// </summary>
+	public bool IsDisabled => DisabledUntilRound > (GameManager.Instance?.CurrentTurn ?? 0);
+
+	/// <summary>
+	/// Disables this structure for <paramref name="rounds"/> rounds of play,
+	/// counting from the round in progress. Called by whatever effect disables
+	/// a unit (M4's EMP, an Anti-Air's reload); the duration is the caller's,
+	/// because it is a property of the effect and not of what is disabled.
+	/// </summary>
+	public void DisableFor(int rounds)
+	{
+		if (rounds <= 0) return;
+
+		int now = GameManager.Instance?.CurrentTurn ?? 0;
+		DisabledUntilRound = Mathf.Max(DisabledUntilRound, now + rounds);
+	}
+
+	/// <summary>
 	/// This structure's identity within its match, handed out when it registers:
 	/// the roots first, then the structures shots deploy, in the order they land.
 	///

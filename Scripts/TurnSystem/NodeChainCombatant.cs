@@ -1,8 +1,10 @@
 using Godot;
 using System.Collections.Generic;
 using MbcPrototype.Core;
+using MbcPrototype.Rules;
 using MbcPrototype.Simulation;
 using MbcPrototype.Units;
+using MbcPrototype.World;
 
 namespace MbcPrototype.TurnSystem;
 
@@ -139,5 +141,104 @@ public abstract partial class NodeChainCombatant : Combatant
 		if (gm == null || unit == null || origin == null) return;
 
 		gm.SubmitCommand(MatchCommand.Launch(Seat, unit.Id, origin.Id, aimAngleRadians, powerPercent));
+	}
+
+	/// <summary>
+	/// Ends this combatant's turn by way of the command log (docs/parity M1):
+	/// a skip carries every unspent point of energy into the next round, and it
+	/// is recorded like any other action so a replay knows where the turn ended.
+	/// </summary>
+	protected void SubmitSkip()
+	{
+		GameManager gm = GameManager.Instance;
+		if (gm == null) return;
+
+		gm.SubmitCommand(MatchCommand.Skip(Seat));
+	}
+
+	/// <summary>
+	/// True when <paramref name="structure"/> is one of this combatant's live
+	/// structures and may launch units (docs/parity M1: only a launcher builds).
+	/// </summary>
+	public bool CanLaunchFrom(Structure structure)
+	{
+		return structure != null
+			&& IsInstanceValid(structure)
+			&& !structure.IsDestroyed
+			&& structure.OwnerChain == this
+			&& structure.Definition != null
+			&& structure.Definition.IsLauncher;
+	}
+
+	/// <summary>
+	/// The live structure of this chain nearest to <paramref name="point"/> that
+	/// may launch units, or null when the chain has none left. The AI and the
+	/// camera both act from a launcher rather than from any node: a chain's
+	/// Harvesters stand in it but cannot fire.
+	/// </summary>
+	public Structure FindLauncherNearestTo(Vector3 point)
+	{
+		Structure best = null;
+		float bestDistance = float.MaxValue;
+
+		foreach (Structure structure in _structures)
+		{
+			if (!CanLaunchFrom(structure)) continue;
+
+			float distance = structure.GlobalPosition.DistanceSquaredTo(point);
+			if (distance < bestDistance)
+			{
+				bestDistance = distance;
+				best = structure;
+			}
+		}
+		return best;
+	}
+
+	/// <summary>
+	/// Energy this combatant earns at the end of a round (docs/parity M1, §7):
+	/// the main Hub's income for a root Hub, then each live Harvester's — more
+	/// while it stands on a pool, nothing while it is disabled.
+	///
+	/// The amounts are read from the rules every time it runs rather than cached,
+	/// so a number changed under a running match is felt at the next round end.
+	/// </summary>
+	/// <param name="rules">The match's rules; null means no income.</param>
+	/// <param name="pools">The map's pools, for "is this Harvester on one"; null means bare ground.</param>
+	/// <param name="breakdown">Optional list filled with one line per source, for the round log.</param>
+	public int ComputeIncome(MatchRules rules, PoolField pools, List<string> breakdown = null)
+	{
+		if (rules == null) return 0;
+
+		int income = 0;
+
+		// Only the main Hub pays: the chain's root, which is the structure
+		// nothing hangs above. A Hub built outward builds but does not generate.
+		Structure root = FindRootStructure();
+		if (root != null && root.Definition != null && root.Definition.IsHub && !root.IsDisabled)
+		{
+			int hub = rules.EffectiveMainHubIncome;
+			income += hub;
+			breakdown?.Add($"main Hub +{hub}");
+		}
+
+		foreach (Structure structure in _structures)
+		{
+			if (structure == null || !IsInstanceValid(structure) || structure.IsDestroyed) continue;
+			if (structure.Definition == null || !structure.Definition.IsHarvester) continue;
+
+			if (structure.IsDisabled)
+			{
+				breakdown?.Add($"Harvester {structure.Id} disabled +0");
+				continue;
+			}
+
+			bool onPool = pools != null && pools.IsInAnyPool(structure.GlobalPosition);
+			int amount = onPool ? rules.EffectiveHarvesterIncomeOnPool : rules.EffectiveHarvesterIncomeOffPool;
+			income += amount;
+			breakdown?.Add($"Harvester {structure.Id} {(onPool ? "on pool" : "off pool")} +{amount}");
+		}
+
+		return income;
 	}
 }

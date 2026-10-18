@@ -30,4 +30,33 @@ public enum UnitTraits
 	/// blast radii).
 	/// </summary>
 	Weapon = 2,
+
+	/// <summary>
+	/// It may launch units: a structure with this flag can be the origin of a
+	/// build, and one without it cannot, however it got onto the map. Today the
+	/// only launcher is the Hub (docs/parity M1), and the flag is what keeps
+	/// that a property of the unit rather than a test for the id "hub" inside
+	/// the launcher. A second launcher is therefore data plus reach, not a
+	/// branch (M4's *launcher capability*).
+	/// </summary>
+	Launcher = 4,
+
+	/// <summary>
+	/// The chain's **main Hub**: the only structure that generates the
+	/// per-round income (docs/parity M1, [units.md](../../docs/parity/units.md)).
+	/// Only a *root* structure with this flag pays it, so a Hub built outward
+	/// from another Hub builds but does not generate. The amount is the match's
+	/// <see cref="MbcPrototype.Rules.MatchRules.MainHubIncome"/>, not the unit's
+	/// business.
+	/// </summary>
+	Hub = 8,
+
+	/// <summary>
+	/// It generates energy at the end of every round, more of it while it stands
+	/// on an energy pool: the original's Energy Collector. The amounts are the
+	/// match's (<see cref="MbcPrototype.Rules.MatchRules.HarvesterIncomeOnPool"/>
+	/// and its off-pool sibling), because they are balance; the flag says what
+	/// shape of income this structure is.
+	/// </summary>
+	Harvester = 16,
 }

@@ -170,10 +170,10 @@ closes; the **size** column is a rough ordering device, not a promise.
 | **Cord network** | the spatial system: reach, overlap rules, cord nodes, cascade, lights | a link is a `Cord` object — two endpoints, its length, the cable — and the destruction cascade runs down it (M0.3). Still no cord nodes, no reach, no overlap test, no lights | **XL** |
 | **Durability** | **hit points** per unit type (the manual's *Armor* column), damage subtracted, partial damage normal | per unit type, from the unit's own resource: `UnitDefinition.HitPoints` (Hub 5), read by `Structure.MaxHealth` | ✅ M0.2 |
 | **Blast damage** | a weapon damages what it strikes **and** what is near it, with a falloff curve nobody published | the two-band model survives, but every number in it is data: radii and damage on the unit, the band share on `MatchRules`; the Bomb does the manual's 3 | ✅ M0.2 |
-| **Energy** | 1/3/7 per unit, max 35, per-round refill, income units | none | **L** |
-| **Turn model** | a turn is an energy budget; round ends when all have spent or skipped; order rotates left | one launch per turn; `CurrentTurn` counts rotation wraps | **L** |
-| **Units** | 18, three levels | 2 of 12 as resources: `hub` and `bomb` in a `UnitCatalog`; `AmmoLauncher` takes a `UnitDefinition` and dispatches through `ILaunchedAmmo` | **L** — ten units to go, and none of them needs a launcher change |
-| **Tunability** | (our own requirement, §2) | the roster, its numbers, the blast curve, the launch ballistics and the AI's profile are all resources; no gameplay number is left in a `.cs` file. The F1 dev overlay edits any of them live and writes them back, and `Scenes/harness.tscn --tune=…` does the same headlessly | ✅ M0.7 |
+| **Energy** | 1/3/7 per unit, max 35, per-round refill, income units | a purse per combatant seeded from `MatchRules` (7), capped at 35, spent by `ApplyCommand` on the unit's `Level`, topped up at the round end by the main Hub (7) and Harvesters (3 on a pool, 1 off it), and carried forward | ✅ M1 |
+| **Turn model** | a turn is an energy budget; round ends when all have spent or skipped; order rotates left | one turn per seat per round, spent as a budget of builds until a skip ends it; a round ends when every seat has had its turn; income is paid and the order rotates left; the human seat has a 60 s clock whose expiry is a recorded skip (M1) | ✅ M1 |
+| **Units** | 18, three levels | 3 of 12 as resources: `hub`, `harvester` and `bomb` in a `UnitCatalog`; `AmmoLauncher` takes a `UnitDefinition` and dispatches through `ILaunchedAmmo`; only a `Launcher`-traited structure (the Hub) may fire | **L** — nine units to go, and none of them needs a launcher change |
+| **Tunability** | (our own requirement, §2) | the roster, its numbers, the blast curve, the launch ballistics, the energy economy (cap, starting purse, Hub and Harvester income), the turn clock and the AI's profile are all resources; no gameplay number is left in a `.cs` file. The F1 dev overlay edits any of them live and writes them back, and `Scenes/harness.tscn --tune=…` does the same headlessly | ✅ M0.7, M1 |
 | **Players** | up to 4, teams, shared line of sight | exactly 2, hardcoded in `GameManager.CreateCombatants()` | **M** — generalise the shape, not the count |
 | **Map** | authored, sized, terrain states, wrap-around | one `MapDefinition` resource: bounds, a height field (flat today), the two 1v1 start positions and the pool field. The minimap and the pools read it (M0.4). Still flat, still unwrapped | **L** — M3 makes the world wrap and the heights matter |
 | **Terrain height** | height changes launch range | none — everything sits at y=0 | **M** — three states, not four |
@@ -184,7 +184,7 @@ closes; the **size** column is a rough ordering device, not a promise.
 | **Modes** | skirmish setup | one hardcoded skirmish | **M** — a 1v1 setup screen |
 | **Map editor** | size, terrain, pools, starting positions, save/load/share | none | **L** — **last** (M9) |
 | **Replays / stats** | Replay Theatre + game summary | a command log recording every action from both seats, with the seed and map, written and read as JSON, plus a state hash to check a replay against (M0.5). No Replay Theatre, no save/load, no summary, no UI | **M** — M7 is the theatre and the summary |
-| **HUD / keys** | energy bar, build menu, HUD bar, D/R/C/N/P/L/A/Tab keys | power bar, two ammo icons, turn label, win/lose labels; `fire_shot`, `aim_left/right`, `switch_ammo_next/previous` | **M** |
+| **HUD / keys** | energy bar, build menu, HUD bar, D/R/C/N/P/L/A/Tab keys | the build menu (1/3/7 pages, unit buttons, energy + next-round income, the clock), the launch view with the power meter, the turn label, win/lose labels; `fire_shot`, `aim_left/right`, `switch_ammo_next/previous`, `build_page_*`, `choose_unit`, `end_turn`, `cancel_launch` (M1). The HUD bar, order display and D/R/C/N/P/L/A are M8 | **M** |
 | **Audio** | music, voice, SFX and volume channels | nothing at all; the repo has no audio assets | **S** — placeholder SFX only |
 
 ### The architectural blockers
@@ -368,7 +368,9 @@ is cheap because of it.
 
   Landed behaviour-preserving: the M0.5 harness produces the same state hash as
   before the move (`c6cd89abf0971af6`, 10 rounds, seed 7), and the same hash
-  changes the moment a number does.
+  changes the moment a number does. **M1 changes that number on purpose**: the
+  state hash now includes the round and each seat's energy, and a turn is several
+  builds, so an M0-era log no longer replays to the M0 hash.
 
 **Exit criteria:** the game still plays as it does today, on the development map,
 with the two existing units; a match is fully described by (map, seed, command
@@ -378,11 +380,52 @@ the harness replays the log to the same hash, and
 `--tune=bomb.Damage=6` on that replay lands structures at different hit points
 and a different hash.
 
-### M1 — The core loop: energy, rounds, turns, build menu
+### M1 — The core loop: energy, rounds, turns, build menu — **Landed**
 
 This is the milestone that makes it *this genre* rather than a projectile duel,
 and it is worth doing before more units. Every number below is a starting value
 from §7, not a target.
+
+**What landed.** A turn is an energy budget. Each seat holds energy
+(`MatchRules.StartingEnergy` 7, cap `MaxStoredEnergy` 35); a build costs the
+unit's `Level`, and `GameManager.ApplyCommand` is the only place energy is spent
+— it checks the acting seat, that the origin is the seat's own **launcher** (the
+Hub's new `Launcher` trait; the Harvester has none), that the unit is buildable
+and affordable, and only charges after the shot has actually been launched. The
+seat may keep building while it can pay; the turn ends on a **Skip** command
+(`end_turn`, the menu's button, the clock running out, or nothing affordable),
+which carries the unspent energy forward. A **round** is one turn from every seat;
+at its end income is paid (see below), the round counter advances, and the order
+**rotates left by one seat**. The controller's `TurnResumed` signal is the new
+seam: after a shot resolves, the same seat may act again.
+
+**Income** is computed in one place, `NodeChainCombatant.ComputeIncome`: the
+chain's root Hub pays `MainHubIncome` (7 — a Hub built outward builds but does not
+generate), and every live Harvester pays `HarvesterIncomeOnPool` (3) or
+`HarvesterIncomeOffPool` (1) according to whether its centre stands in a purple
+pool. A Harvester disabled when the round ends pays nothing — `Structure.IsDisabled`
+is the hook M4's EMP will drive; nothing disables a unit yet. The HUD's
+"next round +N" is that same computation, so the projection cannot drift from the
+payment.
+
+**The build menu** (`Scripts/Presentation/BuildMenu.cs`) is built from the roster:
+an energy/clock strip, a page per level the roster has a unit at (`1`/`3`/`7`), the
+page's unit buttons (disabled when unaffordable), End turn, and the launch view
+(unit, cost, charge) that the power meter reads. The player's turn is two views:
+*build* (pages, Q/E cursor, Enter or a click) and *launch* (A/D aim, hold W to
+charge, release; Esc/right-click cancels back to the menu without spending).
+
+**The turn clock** is `MatchRules.TurnClockSeconds` (60 s, 0 = no clock), shown as
+a countdown in the menu's strip. It pauses while a shot resolves, does not run in
+a replay, and on expiry submits a skip — so the timeout is part of the command log
+and a replay ends the turn at the same point.
+
+**The open question below is settled by reading one turn per round.** The manual's
+"skip all of your turns in the current round" reads as loose wording for a seat's
+turn in the round; one turn per seat per round, spent as a budget, is the shape
+that this milestone's UIs are built on and the one that keeps income and rotation
+simple. If playtesting says otherwise, "a turn is one build" is a change to
+`TurnController.EndTurn`'s trigger, not to the economy.
 
 - Energy pool per player: current, next-round income, **maximum 35**.
 - Unit cost = level = 1/3/7; spending energy replaces "one launch per turn".
@@ -409,6 +452,20 @@ from §7, not a target.
 **Exit criteria:** a full round can be played with correct income, spend,
 carry-over and rotation, using no units other than **Hubs and Harvesters** — and
 the income and cost numbers can be changed from data while the match runs.
+
+**Reached, and how it is checked.** The harness plays a Hub-and-Harvester-only
+match (`--tune=bomb.CanBeBuilt=0`, `--aim=pools`, a 30 %-covered map) and prints
+the ledger each round end, e.g. `You: spent 7, income 13 (main Hub +7, Harvester 6
+on pool +3, Harvester 10 on pool +3) granted 13 → 19/35` — spend, on/off-pool
+income, carry-over and the rotation (`First to act: Enemy` … `First to act: You`)
+all visible in one run, and the state hash includes each seat's energy, so a replay
+proves the loop reproduced exactly. That run records (and replays to) state hash
+`14e62615617f13b9`; the default 10-round, seed-7 match hashes to
+`2c6d2a00819b84b2`, which is the M1 replacement for the M0 baseline. Changing a
+number moves the hash: `--tune=rules.MainHubIncome=20` and
+`--tune=harvester.Level=3` each land a different hash on a replayed log, as does
+`--tune=rules.StartingEnergy=0` or a cap low enough to bite (for example
+`rules.MaxStoredEnergy=8` on the 10-round log).
 
 ### M2 — The cord network
 
@@ -706,7 +763,7 @@ requires a code edit to change.
 | number | home | starting value |
 | --- | --- | --- |
 | **Per unit:** hit points, damage, level/energy cost, vision radius, launch-force scale, build permission, blast radii | each unit's `UnitDefinition` | HP and damage: *(manual)* — Hub 5, Harvester 5, Anti-Air 3, Shield 3, Crawler 3, Repair 1, Balloon 1; Bomb/Missile 3, EMP 2, Cluster 1.5 × 3, Crawler 4. Costs 1/3/7 *(manual)*. Vision and launch scale: *(guess)* |
-| **Match rules:** turn clock, max stored energy, main-Hub income, Harvester income (on/off pool), rounds-per-game if any, disable duration (EMP, anti-air reload), aim rotation speed, charge-meter speed | `MatchRules` | clock 60 s *(manual)*, cap 35 *(manual)*, Hub 7/round *(manual)*, Harvester 3 / 1 *(manual)*, disable 1 turn cycle *(manual)*; aim 3 rad/s, a full charge in one second *(guess)* |
+| **Match rules:** turn clock, starting energy, max stored energy, main-Hub income, Harvester income (on/off pool), rounds-per-game if any, disable duration (EMP, anti-air reload), aim rotation speed, charge-meter speed | `MatchRules` | clock 60 s *(manual)*, cap 35 *(manual)*, Hub 7/round *(manual)*, Harvester 3 / 1 *(manual)*, disable 1 turn cycle *(manual)*; starting 7 *(guess — the manual publishes income, not the opening purse)*; aim 3 rad/s, a full charge in one second *(guess)* |
 | **Blast falloff curve** — the shape between full and no damage | `MatchRules` | two bands: full inside the unit's inner radius, half out to its outer radius *(guess)* |
 | **Launch ballistics:** gravity, arc, muzzle height, launch force range per launcher (and the slope effect on the first, M3) | `MatchRules`, with each launcher's `UnitDefinition.LaunchForceScale` | gravity 9.8, force 4→20, upward bias 5, muzzle height 2 *(guess)*; the shipped Hub throws at the match's reach (scale 1.0) |
 | **Cord rules:** reach per launcher, cord-node spacing, Power Spike taper and node limit | `MatchRules` | spacing and reach *(guess)*; 50-node limit *(manual)* |
@@ -747,10 +804,10 @@ Nothing here is a promise about a finished product: it is the mechanic set the
 base should have, so that there is something solid to iterate on.
 
 **Rules**
-- [ ] Energy 1/3/7, max 35, per-round refill, carry-over
-- [ ] Round ends when both players spend out or skip
-- [ ] Player order shifts left each round
-- [ ] Skip forfeits the round's remaining turns
+- [x] Energy 1/3/7, max 35, per-round refill, carry-over
+- [x] Round ends when both players spend out or skip
+- [x] Player order shifts left each round
+- [x] Skip forfeits the round's remaining turns
 - [x] Hit points per unit type; damage subtracts; partial damage is normal
 - [x] A weapon damages what it strikes **and** what is near it, on a tunable curve
 - [ ] Cords cannot overlap; illegal launches refused
@@ -779,7 +836,7 @@ stated exceptions
 - [x] A match is reproducible from (map, seed, command log)
 
 **Options**
-- [ ] Clock (default 60 s)
+- [x] Clock (default 60 s) — the human's turn clock; the expiry is a recorded skip
 - [ ] Fog (black unseen area; explosions still visible)
 - [ ] ~~Wind~~ — out of the first slice
 - [ ] ~~Teams~~ — out of the first slice
@@ -793,9 +850,9 @@ stated exceptions
 - [ ] ~~Networked multiplayer~~ — deferred to the sequel's own design
 
 **Interface**
-- [ ] Energy bar with next-round income indicator
-- [ ] Build menu on 1/3/7 pages
-- [ ] Launch power meter
+- [x] Energy readout with next-round income indicator (the menu strip; the graphical bar is M8)
+- [x] Build menu on 1/3/7 pages
+- [x] Launch power meter
 - [ ] HUD: time, current player, player order, next-round energy
 - [ ] Hub scrolling (next/previous/center)
 - [ ] Keys: D, R, C, N, P, L, A, remappable
@@ -807,16 +864,19 @@ stated exceptions
 
 ## 10. Where to start
 
-**M0 has landed, so M1 is next.** The foundations are in: units, their numbers,
-the hit-point and blast model, the cord graph, the map, the command log and the
-tuning surface are all data, and a match is reproducible from (map, seed, command
-log). The next commit worth making is the energy/round loop, because that is the
-difference between a duel and this genre.
+**M1 has landed, so M2 — the cord network — is next.** The loop is in: energy,
+rounds, builds, income, skip, the rotating order and the turn clock, all tunable
+from the match's resources and reproducible from the command log. What the game
+still lacks is its actual spatial system: today a launch is refused only for an
+absent launcher or a missing energy, and the chain is a set of cords with no
+rules on them. M2 gives the cords their reach, their overlap rule, their cascade
+and their lights.
 
 M0.7 landed with two units rather than twelve on purpose: the tuning surface was
 cheapest to put in place before the roster grew, and every unit added from here
 inherits it — a new `.tres` whose numbers appear in the F1 overlay without anyone
-adding them to a list.
+adding them to a list. M1 added the third unit (the Harvester) the same way, and
+the economy's numbers went into `MatchRules` rather than into the combatant.
 
 The earliest point at which this is a *game* rather than a prototype is the end
 of **M1**: energy, rounds, income, a build menu, and Hubs and Harvesters

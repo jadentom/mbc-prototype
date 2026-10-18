@@ -8,7 +8,7 @@
 script = ExtResource("3_q2mn0")
 Id = "hub"
 DisplayName = "Hub"
-Traits = 1
+Traits = 13
 Level = 7
 HitPoints = 5
 CanBeBuilt = true

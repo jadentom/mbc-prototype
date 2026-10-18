@@ -1,4 +1,5 @@
 using Godot;
+using MbcPrototype.Rules;
 
 namespace MbcPrototype.TurnSystem;
 
@@ -11,6 +12,12 @@ namespace MbcPrototype.TurnSystem;
 /// Concrete combatants decide how they act: <see cref="NodeChainCombatant"/>
 /// covers anything built from a chain of nodes, which today is both the player
 /// and the enemy.
+///
+/// It also holds the combatant's **energy**: the budget a turn is spent from
+/// (docs/parity M1). The amount that comes back each round is the chain's
+/// business — a <see cref="NodeChainCombatant"/> earns it from its Hub and
+/// Harvesters — but the purse, the cap and what a build takes out of it are the
+/// same for every kind of seat, so they live here.
 /// </summary>
 public abstract partial class Combatant : Node
 {
@@ -45,16 +52,91 @@ public abstract partial class Combatant : Node
 	public abstract bool IsDefeated { get; }
 
 	/// <summary>
+	/// The rules this combatant's energy economy runs on (docs/parity §7): the
+	/// cap and the starting purse come from here, so changing either is an edit
+	/// in one resource and not a rebuild. Handed in by
+	/// <see cref="MbcPrototype.Core.MatchSetup"/>, which is where the match's
+	/// rules are resolved.
+	/// </summary>
+	public MatchRules Rules { get; set; } = MatchRules.Fallback;
+
+	/// <summary>
+	/// Energy this combatant may still spend. It starts at the rules' starting
+	/// purse, every build takes its unit's <see cref="MbcPrototype.Units.UnitDefinition.Level"/>
+	/// out of it, and the end of a round adds the income (capped, so unspent
+	/// energy carries up to the cap).
+	/// </summary>
+	public int Energy { get; private set; }
+
+	/// <summary>Energy this combatant spent during the round in progress (for the round ledger).</summary>
+	public int EnergySpentThisRound { get; private set; }
+
+	/// <summary>Most energy this combatant may hold.</summary>
+	public int MaxEnergy => Rules?.EffectiveMaxStoredEnergy ?? MatchRules.FallbackMaxStoredEnergy;
+
+	/// <summary>
+	/// Seeds the purse at the rules' starting energy. Called once by the match
+	/// setup, before the first turn: it is the one energy change that is not
+	/// income and not a build.
+	/// </summary>
+	public void BeginMatch()
+	{
+		Energy = Mathf.Clamp(Rules?.EffectiveStartingEnergy ?? 0, 0, MaxEnergy);
+		EnergySpentThisRound = 0;
+	}
+
+	/// <summary>True when this combatant can pay <paramref name="cost"/> right now.</summary>
+	public bool CanAfford(int cost)
+	{
+		return cost > 0 && Energy >= cost;
+	}
+
+	/// <summary>
+	/// Takes the cost of a build out of the purse. Returns false and changes
+	/// nothing when it cannot be paid, so a caller can try another unit instead
+	/// — the turn is only over when nothing is affordable.
+	/// </summary>
+	public bool SpendEnergy(int cost)
+	{
+		if (!CanAfford(cost)) return false;
+
+		Energy -= cost;
+		EnergySpentThisRound += cost;
+		return true;
+	}
+
+	/// <summary>
+	/// Pays income at the end of a round, up to the cap. Returns how much of it
+	/// was actually banked: energy already at the cap is lost, which is what
+	/// makes the cap mean something.
+	/// </summary>
+	public int GrantIncome(int income)
+	{
+		if (income <= 0) return 0;
+
+		int room = Mathf.Max(0, MaxEnergy - Energy);
+		int granted = Mathf.Min(income, room);
+		Energy += granted;
+		return granted;
+	}
+
+	/// <summary>Starts a fresh spending tally for the round that is beginning.</summary>
+	public void ResetRoundSpending()
+	{
+		EnergySpentThisRound = 0;
+	}
+
+	/// <summary>
 	/// Called by the GameManager when this combatant's turn begins. A
 	/// player-controlled combatant just waits for input; an AI combatant
-	/// starts acting here (and must eventually register a TurnEvent, or call
-	/// GameManager.EndIdleTurn() if it cannot act).
+	/// starts acting here (and must eventually submit a build, or skip the
+	/// rest of the turn, or both).
 	/// </summary>
 	public abstract void BeginTurn();
 
 	/// <summary>
-	/// Called once this combatant's turn is over — either because its events
-	/// resolved or because the match ended. Used by AI combatants to abandon
+	/// Called once this combatant's turn is over — either because it spent out
+	/// or skipped, or because the match ended. Used by AI combatants to abandon
 	/// whatever they were doing.
 	/// </summary>
 	public virtual void EndTurn() { }

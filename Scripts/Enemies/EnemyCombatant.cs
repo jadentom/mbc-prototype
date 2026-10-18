@@ -1,6 +1,5 @@
 using Godot;
 using System.Collections.Generic;
-using MbcPrototype.Combat;
 using MbcPrototype.Core;
 using MbcPrototype.TurnSystem;
 using MbcPrototype.Units;
@@ -9,17 +8,19 @@ namespace MbcPrototype.Enemies;
 
 /// <summary>
 /// A node-chain combatant driven by a simple AI. It is the player's mirror
-/// image: the same nodes, the same roster, the same launch path and the same
-/// defeat rule — the only difference is that its aim and power come from
-/// <see cref="ChooseAimAngle"/> and a random roll instead of from input.
+/// image: the same nodes, the same roster, the same launch path, the same energy
+/// budget and the same defeat rule — the only difference is that its aim and
+/// power come from <see cref="ChooseAimAngle"/> and a random roll instead of
+/// from input.
 ///
 /// Every number it plays by lives in its <see cref="Profile"/> (docs/parity §7),
-/// so there is no enemy tuning in this file or anywhere above it. Each of its
-/// turns it plans exactly one action and releases it after the profile's think
-/// time, working through the catalog's buildable units in order. Override
-/// <see cref="ChooseAimAngle"/> (or the planning step in <see cref="BeginTurn"/>)
-/// to build a smarter enemy without touching the turn system — docs/parity M6
-/// replaces this with one real planner.
+/// so there is no enemy tuning in this file or anywhere above it. It spends its
+/// turn's energy the way the player does (docs/parity M1): it plans one build,
+/// releases it after the profile's think time, and when the shot has resolved it
+/// plans the next one — until nothing in the roster is affordable, at which
+/// point it skips and carries the rest of its purse forward. It works through
+/// the catalog's buildable units in order; there is deliberately no judgement in
+/// it, because docs/parity M6 is where the real planner lands.
 /// </summary>
 public partial class EnemyCombatant : NodeChainCombatant
 {
@@ -34,15 +35,16 @@ public partial class EnemyCombatant : NodeChainCombatant
 	public override bool IsPlayerControlled => false;
 
 	/// <summary>
-	/// The enemy always acts from the node closest to its target, so its chain
-	/// creeps toward the player instead of piling up around its own root.
+	/// The enemy acts from the launcher closest to its target, so its chain
+	/// creeps toward the player instead of piling up around its own root. A
+	/// Harvester standing in the chain is not a launcher, so it is never chosen.
 	/// </summary>
 	public override Structure ActionStructure
 	{
 		get
 		{
 			Structure target = PickTarget(RootPosition);
-			return FindNodeClosestTo(target) ?? base.ActionStructure;
+			return FindLauncherNearestTo(target?.GlobalPosition ?? RootPosition) ?? base.ActionStructure;
 		}
 	}
 
@@ -56,37 +58,49 @@ public partial class EnemyCombatant : NodeChainCombatant
 	/// <summary>Where in the catalog's buildable list the next plan picks from.</summary>
 	private int _nextUnitIndex;
 
+	/// <summary>
+	/// Plans the next build of this turn — or skips, when nothing in the roster is
+	/// affordable (docs/parity M1: "spent out" ends a turn). Called when the turn
+	/// starts and again every time the previous shot resolves.
+	/// </summary>
 	public override void BeginTurn()
 	{
-		if (ActionStructure == null)
+		Structure origin = ActionStructure;
+		if (origin == null)
 		{
-			// Nothing to act from: spend the turn instead of stalling the rotation.
-			GameManager.Instance?.EndIdleTurn();
+			// Nothing to act from: skip instead of stalling the rotation.
+			SubmitSkip();
 			return;
 		}
 
-		// Works through the roster's buildable units in order — the whole list,
-		// so a new unit in the catalog is a unit this enemy may use. There is no
-		// judgement here; docs/parity M6 is where it learns to spend energy.
 		IReadOnlyList<UnitDefinition> buildable = GameManager.Instance?.Catalog?.Buildable;
 		if (buildable == null || buildable.Count == 0)
 		{
 			GD.PushError("EnemyCombatant: no buildable units in the match's catalog — nothing to launch.");
-			GameManager.Instance?.EndIdleTurn();
+			SubmitSkip();
+			return;
+		}
+
+		UnitDefinition planned = ChooseAffordableUnit(buildable);
+		if (planned == null)
+		{
+			// Every unit in the roster costs more than the energy left: the budget
+			// is spent out, so the turn ends and the energy carries forward.
+			GD.Print($"[Enemy] {DisplayName}: {Energy} energy buys nothing — skipping the rest of the turn.");
+			SubmitSkip();
 			return;
 		}
 
 		_acting = true;
 		_thinkTimer = Mathf.Max(Profile?.ThinkTime ?? 0f, 0f);
 
-		_plannedUnit = buildable[_nextUnitIndex % buildable.Count];
-		_nextUnitIndex++;
-
-		_plannedAimAngle = ChooseAimAngle();
+		_plannedUnit = planned;
+		_plannedAimAngle = ChooseAimAngle(origin);
 		_plannedPowerPercent = Random.RandfRange(Profile?.MinPowerPercent ?? 0f, Profile?.MaxPowerPercent ?? 1f);
 
 		Preview(0f);
-		GD.Print($"[Enemy] Planning {_plannedUnit.DisplayName}: {Mathf.RadToDeg(_plannedAimAngle):0}°, power {_plannedPowerPercent:0.00}");
+		GD.Print($"[Enemy] Planning {_plannedUnit.DisplayName} ({_plannedUnit.Level} energy, {Energy} left): "
+			+ $"{Mathf.RadToDeg(_plannedAimAngle):0}°, power {_plannedPowerPercent:0.00}");
 	}
 
 	public override void EndTurn()
@@ -101,9 +115,9 @@ public partial class EnemyCombatant : NodeChainCombatant
 		Structure origin = ActionStructure;
 		if (origin == null)
 		{
-			// Lost the node it was aiming from: spend the turn rather than stall.
+			// Lost the node it was aiming from: skip rather than stall.
 			_acting = false;
-			GameManager.Instance?.EndIdleTurn();
+			SubmitSkip();
 			return;
 		}
 
@@ -121,8 +135,30 @@ public partial class EnemyCombatant : NodeChainCombatant
 		Launch(_plannedUnit, origin, _plannedAimAngle, _plannedPowerPercent);
 
 		// If nothing could be launched (no ammo scene, dead origin) no TurnEvent
-		// was registered and the rotation would wait forever — spend the turn.
-		GameManager.Instance?.EndIdleTurn();
+		// was registered and the rotation would wait forever — skip the turn. When
+		// a shot *did* go out, the turn resumes here when it resolves, and
+		// BeginTurn plans the next build.
+		if (!(GameManager.Instance?.IsResolvingTurn ?? false)) SubmitSkip();
+	}
+
+	/// <summary>
+	/// The first unit in the roster the energy can pay for, starting where the last
+	/// plan left off and wrapping. Null when the energy buys nothing at all.
+	/// </summary>
+	private UnitDefinition ChooseAffordableUnit(IReadOnlyList<UnitDefinition> buildable)
+	{
+		if (buildable.Count == 0) return null;
+
+		for (int step = 0; step < buildable.Count; step++)
+		{
+			int index = (_nextUnitIndex + step) % buildable.Count;
+			UnitDefinition unit = buildable[index];
+			if (unit == null || !CanAfford(unit.Level)) continue;
+
+			_nextUnitIndex = (index + 1) % buildable.Count;
+			return unit;
+		}
+		return null;
 	}
 
 	/// <summary>
@@ -130,9 +166,8 @@ public partial class EnemyCombatant : NodeChainCombatant
 	/// random angle within the profile's <see cref="AiProfile.AimSpreadDegrees"/>.
 	/// With a small spread the AI stays dangerous; at 180° it is pure random.
 	/// </summary>
-	private float ChooseAimAngle()
+	private float ChooseAimAngle(Structure origin)
 	{
-		Structure origin = ActionStructure ?? RootStructure;
 		Structure target = PickTarget(RootPosition);
 		if (origin == null || target == null)
 		{
@@ -193,29 +228,6 @@ public partial class EnemyCombatant : NodeChainCombatant
 					bestDistance = distance;
 					best = node;
 				}
-			}
-		}
-
-		return best;
-	}
-
-	/// <summary>This chain's live node nearest to <paramref name="target"/> (null when it has none).</summary>
-	private Structure FindNodeClosestTo(Structure target)
-	{
-		if (target == null) return null;
-
-		Structure best = null;
-		float bestDistance = float.MaxValue;
-
-		foreach (Structure node in Structures)
-		{
-			if (node == null || !IsInstanceValid(node) || node.IsDestroyed) continue;
-
-			float distance = node.GlobalPosition.DistanceSquaredTo(target.GlobalPosition);
-			if (distance < bestDistance)
-			{
-				bestDistance = distance;
-				best = node;
 			}
 		}
 

@@ -6,16 +6,24 @@ namespace MbcPrototype.Simulation;
 /// The kinds of action a match can be given, and therefore the kinds a command
 /// log can hold.
 ///
-/// One today: firing a unit <em>is</em> building in this game, so a launch is the
-/// whole of a turn's input. M1 adds the actions an energy budget brings (a build
-/// menu, skipping a round, ending a turn), and each one is a new value here plus
-/// a case in <see cref="MbcPrototype.Core.GameManager.ApplyCommand"/> — never a
-/// new code path around the log.
+/// A launch is a build (in this game everything is built by launching a unit out
+/// of a launcher), and a skip ends the seat's turn with its energy carried
+/// forward — docs/parity M1. M2 adds the launches that a cord rule can refuse;
+/// each new kind is a value here plus a case in
+/// <see cref="MbcPrototype.Core.GameManager.ApplyCommand"/> — never a new code
+/// path around the log.
 /// </summary>
 public enum CommandKind
 {
 	/// <summary>Fire a unit from one of the acting seat's structures.</summary>
 	Launch = 0,
+
+	/// <summary>
+	/// End the acting seat's turn: the rest of its energy is carried into the
+	/// next round and the turn passes on. The original's <em>Skip</em>
+	/// (docs/parity M1).
+	/// </summary>
+	Skip = 1,
 }
 
 /// <summary>
@@ -69,6 +77,17 @@ public readonly struct MatchCommand
 	public static MatchCommand Launch(int seat, string unitId, int originStructureId, float aimAngleRadians, float powerPercent)
 	{
 		return new MatchCommand(CommandKind.Launch, seat, unitId, originStructureId, aimAngleRadians, powerPercent);
+	}
+
+	/// <summary>
+	/// The seat ends its turn, carrying whatever energy it has not spent
+	/// (docs/parity M1). The unit, origin, aim and power fields are empty: a
+	/// skip names nothing but the seat that skipped, and every command carries
+	/// the same fields so one shape reads and writes all of them.
+	/// </summary>
+	public static MatchCommand Skip(int seat)
+	{
+		return new MatchCommand(CommandKind.Skip, seat, "", 0, 0f, 0f);
 	}
 
 	/// <summary>This command as a serializable dictionary.</summary>
@@ -128,6 +147,11 @@ public readonly struct MatchCommand
 	/// <summary>One line describing this command, for logs and test output.</summary>
 	public string Describe()
 	{
+		if (Kind == CommandKind.Skip)
+		{
+			return $"Skip by seat {Seat} (turn over, energy carried)";
+		}
+
 		return $"{Kind} by seat {Seat}: {UnitId} from structure {OriginStructureId} "
 			+ $"at {Mathf.RadToDeg(AimAngleRadians):0.#}°, power {PowerPercent:0.###}";
 	}

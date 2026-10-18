@@ -20,35 +20,34 @@ public partial class UnitCatalog : Resource
 	/// <summary>Every unit in the roster, in the order the HUD shows them.</summary>
 	[Export] public Godot.Collections.Array<UnitDefinition> Units = new Godot.Collections.Array<UnitDefinition>();
 
-	// Built on first use and cached; a catalog is content and does not change
-	// while a match is running.
-	private List<UnitDefinition> _buildable;
-
 	/// <summary>How many units the roster holds.</summary>
 	public int Count => Units?.Count ?? 0;
 
 	/// <summary>
 	/// The units a player or the AI may actually build, in catalog order:
-	/// everything with <see cref="UnitDefinition.CanBeBuilt"/> set. The HUD's
-	/// unit strip and the AI's plan both come from here, so "what can be built"
-	/// has one home.
+	/// everything with <see cref="UnitDefinition.CanBeBuilt"/> set. The build
+	/// menu and the AI's plan both come from here, so "what can be built" has
+	/// one home, and it is the units' own resources.
+	///
+	/// The list is rebuilt on every read (it is a handful of units) so a live
+	/// change to a unit's build permission — the overlay and <c>--tune</c> can
+	/// switch a unit out of the roster mid-match — is obeyed immediately. It is
+	/// a fresh list each time rather than a cached one, so a caller can hold on
+	/// to it without a later read changing what it is looking at.
 	/// </summary>
 	public IReadOnlyList<UnitDefinition> Buildable
 	{
 		get
 		{
-			if (_buildable == null)
+			var buildable = new List<UnitDefinition>();
+			if (Units != null)
 			{
-				_buildable = new List<UnitDefinition>();
-				if (Units != null)
+				foreach (UnitDefinition unit in Units)
 				{
-					foreach (UnitDefinition unit in Units)
-					{
-						if (unit != null && unit.CanBeBuilt) _buildable.Add(unit);
-					}
+					if (unit != null && unit.CanBeBuilt) buildable.Add(unit);
 				}
 			}
-			return _buildable;
+			return buildable;
 		}
 	}
 

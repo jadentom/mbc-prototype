@@ -1,9 +1,11 @@
 using Godot;
 using System.Collections.Generic;
 using MbcPrototype.Core;
+using MbcPrototype.Rules;
 using MbcPrototype.Simulation;
 using MbcPrototype.TurnSystem;
 using MbcPrototype.Units;
+using MbcPrototype.World;
 
 namespace MbcPrototype.Testing;
 
@@ -31,7 +33,9 @@ namespace MbcPrototype.Testing;
 /// <c>--replay</c> (play this log), <c>--expect</c> (fail unless the final hash is
 /// this one), <c>--tune=&lt;target&gt;.&lt;Property&gt;=&lt;value&gt;</c> (change one of the
 /// match's numbers before it starts; repeatable), <c>--save-tuning</c> (write the
-/// tuned numbers back into their resources), <c>--quiet</c>.
+/// tuned numbers back into their resources), <c>--aim=enemy|pools</c> (aim the
+/// player's builds at the enemy, or at the nearest energy pool in reach, which
+/// exercises the Harvester's on-pool income — docs/parity M1), <c>--quiet</c>.
 ///
 /// <c>--tune</c> and <c>--save-tuning</c> go through
 /// <see cref="TuningSurface"/> — the same surface the developer overlay edits
@@ -60,6 +64,9 @@ public partial class MatchHarness : Node
 
 	private int _turns = 4;
 	private int _seed = 12345;
+
+	/// <summary>Where the harness's builds are aimed: at the enemy, or at the nearest pool in reach.</summary>
+	private string _aimMode = "enemy";
 	private string _recordPath;
 	private string _replayPath;
 	private string _expectedHash;
@@ -213,46 +220,79 @@ public partial class MatchHarness : Node
 	}
 
 	/// <summary>
-	/// The harness's policy for the human's seat: fire the next unit in the roster
-	/// from the structure closest to the enemy, aimed at it, at a fixed charge. A
-	/// fixed policy is the point — the match has to be the same match twice.
+	/// The harness's policy for the human's seat: build the first unit in the
+	/// roster the energy can pay for (docs/parity M1), from the launcher nearest
+	/// the enemy, or skip the rest of the turn when nothing is affordable. A fixed
+	/// policy is the point — the match has to be the same match twice.
 	/// </summary>
 	private void SubmitPlayerAction()
 	{
 		Combatant seat = _match.ActiveCombatant;
 		IReadOnlyList<UnitDefinition> buildable = _match.Catalog?.Buildable;
-		if (buildable == null || buildable.Count == 0)
+		if (seat == null || buildable == null || buildable.Count == 0)
 		{
-			_match.EndIdleTurn();
+			_match.SkipTurn();
 			return;
 		}
 
-		Structure origin = NearestOwnStructure(seat, out Structure target);
-		if (origin == null || target == null)
+		Structure origin = NearestOwnLauncher(seat, out Structure target);
+		UnitDefinition unit = ChooseAffordable(seat, buildable);
+		if (origin == null || unit == null)
 		{
-			_match.EndIdleTurn();
+			_match.SkipTurn();
 			return;
 		}
 
-		Vector3 delta = target.GlobalPosition - origin.GlobalPosition;
-		float aim = Mathf.Atan2(delta.X, delta.Z);
-		UnitDefinition unit = buildable[_shots % buildable.Count];
-		_shots++;
+		float aim;
+		float power = PlayerPower;
+		if (_aimMode == "pools" && TryAimAtPool(origin, out float poolAim, out float poolPower))
+		{
+			aim = poolAim;
+			power = poolPower;
+		}
+		else if (target != null)
+		{
+			Vector3 delta = target.GlobalPosition - origin.GlobalPosition;
+			aim = Mathf.Atan2(delta.X, delta.Z);
+		}
+		else
+		{
+			_match.SkipTurn();
+			return;
+		}
 
-		_match.SubmitCommand(MatchCommand.Launch(seat.Seat, unit.Id, origin.Id, aim, PlayerPower));
+		_match.SubmitCommand(MatchCommand.Launch(seat.Seat, unit.Id, origin.Id, aim, power));
 	}
 
-	/// <summary>The charge the harness's player fires at. Short of full: a flat arc that lands.</summary>
+	/// <summary>The charge the harness's player fires at when it is aiming at the enemy.</summary>
 	private const float PlayerPower = 0.6f;
 
-	/// <summary>Own structure closest to the enemy, and the enemy structure it is closest to.</summary>
-	private Structure NearestOwnStructure(Combatant seat, out Structure target)
+	/// <summary>
+	/// The first buildable unit the seat can pay for, starting where the last build
+	/// left off and wrapping — the same order the AI works through, so a run covers
+	/// the roster.
+	/// </summary>
+	private UnitDefinition ChooseAffordable(Combatant seat, IReadOnlyList<UnitDefinition> buildable)
+	{
+		for (int step = 0; step < buildable.Count; step++)
+		{
+			UnitDefinition unit = buildable[(_shots + step) % buildable.Count];
+			if (unit == null || !seat.CanAfford(unit.Level)) continue;
+
+			_shots = (_shots + step + 1) % buildable.Count;
+			return unit;
+		}
+		return null;
+	}
+
+	/// <summary>Own launcher closest to the enemy, and the enemy structure it is closest to.</summary>
+	private Structure NearestOwnLauncher(Combatant seat, out Structure target)
 	{
 		target = null;
 		Structure origin = null;
 		float best = float.MaxValue;
 
-		// The enemy first: the seat's own structures are then judged against it.
+		// The enemy first: the seat's own launchers are then judged against it.
 		Structure enemy = null;
 		float nearestEnemy = float.MaxValue;
 		foreach (Combatant combatant in _match.Combatants)
@@ -263,9 +303,10 @@ public partial class MatchHarness : Node
 			foreach (Structure structure in chain.Structures)
 			{
 				if (!IsLive(structure)) continue;
-				float distance = structure.GlobalPosition.DistanceSquaredTo(seat is NodeChainCombatant own && own.RootStructure != null
-					? own.RootStructure.GlobalPosition
-					: Vector3.Zero);
+				float distance = structure.GlobalPosition.DistanceSquaredTo(
+					seat is NodeChainCombatant own && own.RootStructure != null
+						? own.RootStructure.GlobalPosition
+						: Vector3.Zero);
 				if (distance < nearestEnemy)
 				{
 					nearestEnemy = distance;
@@ -280,6 +321,8 @@ public partial class MatchHarness : Node
 		foreach (Structure structure in ours.Structures)
 		{
 			if (!IsLive(structure)) continue;
+			if (structure.Definition == null || !structure.Definition.IsLauncher) continue;
+
 			float distance = structure.GlobalPosition.DistanceSquaredTo(enemy.GlobalPosition);
 			if (distance < best)
 			{
@@ -288,6 +331,71 @@ public partial class MatchHarness : Node
 			}
 		}
 		return origin;
+	}
+
+	/// <summary>
+	/// Aims a build so that it lands on the nearest energy pool the launcher can
+	/// reach — the one place in the harness that has to invert the ballistics, and
+	/// only so that a headless run can exercise the Harvester's on-pool income
+	/// (docs/parity M1). It reads every number off the match's rules and the
+	/// launcher's own definition, so a tuned arc still lands where it is aimed.
+	///
+	/// The flight is the simulation's own: a horizontal launch force with a fixed
+	/// upward bias, falling under the rules' gravity from the launcher's muzzle
+	/// height. Returns false when no pool is within reach.
+	/// </summary>
+	private bool TryAimAtPool(Structure origin, out float aim, out float power)
+	{
+		aim = 0f;
+		power = 0f;
+
+		PoolField pools = _match.Pools;
+		MatchRules rules = _match.ActiveRules;
+		if (pools == null || rules == null || origin == null) return false;
+
+		float gravity = rules.EffectiveGravity;
+		float bias = rules.EffectiveUpwardBias;
+		float muzzle = rules.EffectiveMuzzleHeight;
+		if (gravity <= 0f || bias <= 0f) return false;
+
+		// Time in the air: the muzzle height plus the upward bias, under gravity.
+		float flightTime = (bias + Mathf.Sqrt((bias * bias) + (2f * gravity * muzzle))) / gravity;
+		if (flightTime <= 0f) return false;
+
+		float baseMin = rules.MinLaunchForce;
+		float baseMax = rules.MaxLaunchForce;
+		if (baseMax <= baseMin)
+		{
+			baseMin = MatchRules.FallbackMinLaunchForce;
+			baseMax = MatchRules.FallbackMaxLaunchForce;
+		}
+		float reachScale = origin.Definition != null && origin.Definition.LaunchForceScale > 0f
+			? origin.Definition.LaunchForceScale
+			: 1f;
+		float minRange = baseMin * reachScale * flightTime;
+		float maxRange = baseMax * reachScale * flightTime;
+
+		var from = new Vector2(origin.GlobalPosition.X, origin.GlobalPosition.Z);
+		PurplePool nearest = null;
+		float nearestDistance = float.MaxValue;
+		foreach (PurplePool pool in pools.Pools)
+		{
+			var at = new Vector2(pool.GlobalPosition.X, pool.GlobalPosition.Z);
+			float distance = from.DistanceTo(at);
+			if (distance < minRange || distance > maxRange) continue;
+			if (distance < nearestDistance)
+			{
+				nearestDistance = distance;
+				nearest = pool;
+			}
+		}
+		if (nearest == null) return false;
+
+		var delta = new Vector2(nearest.GlobalPosition.X - origin.GlobalPosition.X,
+			nearest.GlobalPosition.Z - origin.GlobalPosition.Z);
+		aim = Mathf.Atan2(delta.X, delta.Y);
+		power = Mathf.Clamp(((nearestDistance / flightTime) / reachScale - baseMin) / (baseMax - baseMin), 0f, 1f);
+		return true;
 	}
 
 	private static bool IsLive(Structure structure)
@@ -414,10 +522,11 @@ public partial class MatchHarness : Node
 				case "replay": _replayPath = value; break;
 				case "expect": _expectedHash = value; break;
 				case "tune": _tunes.Add(value); break;
+				case "aim": _aimMode = value; break;
 				case "save-tuning": _saveTuning = true; break;
 				case "quiet": _quiet = true; break;
 				default:
-					Fail($"unknown option '{argument}'. Options: --turns= --seed= --record= --replay= --expect= --tune= --save-tuning --quiet.");
+					Fail($"unknown option '{argument}'. Options: --turns= --seed= --record= --replay= --expect= --tune= --save-tuning --aim= --quiet.");
 					return false;
 			}
 		}
