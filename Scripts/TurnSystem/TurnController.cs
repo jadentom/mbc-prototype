@@ -4,48 +4,45 @@ using System.Collections.Generic;
 namespace MbcPrototype.TurnSystem;
 
 /// <summary>
-/// The turn flow (docs/parity M0.6, M1): whose turn it is, when a turn is
+/// The turn flow (docs/parity M1): whose turn it is, when a turn is
 /// committed, when its events have resolved, when the round rolls over, and when
 /// the match is over. It owns the rotation, the pending <see cref="TurnEvent"/>s
-/// and the round counter.
+/// and the two counters the HUD reads — the round and the turn inside it.
 ///
-/// **A turn is an energy budget** (docs/parity M1). One seat acts at a time, and
-/// within its turn it may build as many units as its energy pays for; the turn
-/// ends when the seat **skips** (which carries its unspent energy forward) or
-/// when nothing is left to spend on. A **round** is one turn from every seat
-/// still in the match; when the last one ends the round does too — energy is
-/// paid out, and the order **rotates left**, so the seat that went first this
-/// round goes last next round.
+/// **A round and a turn are different things.** A **turn** is exactly one
+/// launch: the seat picks a unit, fires it, its event resolves, and the turn is
+/// over. A **round** is the seats taking turns in order — the human, then the
+/// enemy, then the human again — until every seat has either spent out or
+/// skipped; at the round's end the seats are paid their income and the round
+/// advances, with the order **rotated left** so the seat that went first goes
+/// last next round (docs/parity M1).
+///
+/// A seat that **skips** forfeits the rest of the round: the energy it did not
+/// spend carries forward, but it takes no further turns until the next round.
+/// That is the same thing as being spent out — a purse that cannot pay for any
+/// unit in the roster skips itself — so a round always ends when every seat is
+/// out of turns, never on a timer.
 ///
 /// It decides nothing about *how* a seat acts. It announces that a turn has
-/// started (<see cref="TurnStartedEventHandler"/>) and, after a shot resolves,
-/// that the same seat may act again (<see cref="TurnResumedEventHandler"/>);
-/// whoever listens takes the turn — player input, an AI combatant, or a recorded
-/// command log being replayed. That separation is what lets a replay drive both
-/// seats without the turn system knowing replays exist, and what lets a turn
-/// hold several launches without the rotation knowing what a launch is.
+/// started (<see cref="TurnStartedEventHandler"/>) and lets whoever listens take
+/// it — player input, an AI combatant, or a recorded command log being replayed.
+/// That separation is what lets a replay drive both seats without the turn system
+/// knowing replays exist, and what keeps a turn one launch without the rotation
+/// knowing what a launch is.
 /// </summary>
 public partial class TurnController : Node
 {
 	/// <summary>
-	/// Raised when a combatant's turn begins. Whoever listens takes the turn: this
-	/// node has already made it the active combatant, and will not move on until
-	/// the turn is ended (a skip, or nothing left to build) — a shot resolving
-	/// only produces <see cref="TurnResumedEventHandler"/>.
+	/// Raised when a combatant's turn begins: it is the active combatant, and the
+	/// turn lasts until one launch of its resolves or it skips. Whoever listens
+	/// takes the turn — this node will not move on by itself.
 	/// </summary>
 	[Signal] public delegate void TurnStartedEventHandler(Combatant combatant);
 
 	/// <summary>
-	/// Raised when the events a turn registered have all resolved: the shot has
-	/// landed, the damage is done, and the **same** seat may act again from its
-	/// remaining energy. It is not a new turn.
-	/// </summary>
-	[Signal] public delegate void TurnResumedEventHandler(Combatant combatant);
-
-	/// <summary>
-	/// Raised when the first event of a turn is registered — control is locked from
-	/// here until the turn's events all resolve. The HUD and the player's aiming
-	/// state listen for this to cancel a charge in progress.
+	/// Raised when a turn's launch is registered — control is locked from here
+	/// until its events all resolve. The HUD and the player's aiming state listen
+	/// for this to cancel a charge in progress.
 	/// </summary>
 	[Signal] public delegate void TurnCommittedEventHandler();
 
@@ -67,32 +64,43 @@ public partial class TurnController : Node
 	private readonly List<TurnEvent> _pendingTurnEvents = new List<TurnEvent>();
 
 	/// <summary>
-	/// The seats in the order they act this round: every combatant that is still
-	/// in the match, starting with the one whose turn to go first it is, and
-	/// rotated left by one seat each round (docs/parity M1).
+	/// The seats that still owe a turn this round, in the order they will take
+	/// them: the front is the seat acting now (or next), and a seat that finishes a
+	/// launch goes to the back. A seat that skips, or is defeated, leaves it — which
+	/// is how a round ends: when nothing is left in the queue. Rotating the order at
+	/// the round's start is what makes the seat that went first go last next round.
 	/// </summary>
 	private readonly List<Combatant> _roundOrder = new List<Combatant>();
-
-	private int _roundCursor = -1;
 
 	// A turn advance waiting for idle time (see QueueAdvance).
 	private bool _advanceQueued;
 
-	// A courtesy of the same kind: the "may act again" announcement is deferred
-	// too (see QueueResume), because an event can resolve inside _ExitTree.
-	private bool _resumeQueued;
-
 	/// <summary>Every combatant in the rotation, in seat order.</summary>
 	public IReadOnlyList<Combatant> Combatants => _combatants;
 
-	/// <summary>The order the seats act in this round, for the HUD.</summary>
+	/// <summary>
+	/// The seats still owed a turn this round, in order, the acting one first. For
+	/// the HUD's order display and for anyone asking "who is left to act".
+	/// </summary>
 	public IReadOnlyList<Combatant> RoundOrder => _roundOrder;
 
 	/// <summary>The combatant whose turn it currently is (null between turns).</summary>
 	public Combatant ActiveCombatant { get; private set; }
 
-	/// <summary>Current round number. Starts at 1 and advances when every seat has acted.</summary>
+	/// <summary>
+	/// The round being played: one turn per seat until every seat is out of turns.
+	/// Energy is paid out at its end (see <see cref="RoundEndedEventHandler"/>), and
+	/// it is the number the HUD shows next to the turn.
+	/// </summary>
 	public int Round { get; private set; } = 1;
+
+	/// <summary>
+	/// Which turn of this round is being played, counting from 1. Turns alternate
+	/// inside a round, so this is what tells the player how far through the round
+	/// they are — <see cref="Round"/> alone cannot, because a round holds as many
+	/// turns as the seats' energy pays for.
+	/// </summary>
+	public int TurnNumber { get; private set; }
 
 	/// <summary>True while a turn's events are still resolving, so control is locked.</summary>
 	public bool IsResolving { get; private set; }
@@ -121,7 +129,6 @@ public partial class TurnController : Node
 		if (combatants != null) _combatants.AddRange(combatants);
 		_pendingTurnEvents.Clear();
 		_roundOrder.Clear();
-		_resumeQueued = false;
 		_advanceQueued = false;
 
 		PlayerTeam = -1;
@@ -135,11 +142,11 @@ public partial class TurnController : Node
 		}
 
 		Round = 1;
+		TurnNumber = 0;
 		IsOver = false;
 		IsResolving = false;
 		IsPlayerTurn = false;
 		ActiveCombatant = null;
-		_roundCursor = -1;
 
 		BuildRoundOrder();
 		if (_roundOrder.Count == 0)
@@ -148,15 +155,13 @@ public partial class TurnController : Node
 			return;
 		}
 
-		_roundCursor = 0;
 		StartTurn(_roundOrder[0]);
 	}
 
 	/// <summary>
-	/// Registers an event that must resolve before control returns to the seat
-	/// that is acting. Registering the first event commits the turn and takes
-	/// control away from the player; control returns — to the same seat — when the
-	/// last pending event resolves.
+	/// Registers the event a turn's launch creates. Registering the first one
+	/// commits the turn and takes control away from the player; when the last
+	/// pending event resolves the turn is over and the next seat takes it.
 	/// </summary>
 	public void RegisterEvent(TurnEvent evt)
 	{
@@ -169,17 +174,17 @@ public partial class TurnController : Node
 			IsPlayerTurn = false;
 			EmitSignal(SignalName.TurnCommitted);
 
-			GD.Print($"[Round {Round}] Turn committed — control locked.");
+			GD.Print($"[Round {Round} · Turn {TurnNumber}] Committed — control locked.");
 		}
 
 		_pendingTurnEvents.Add(evt);
 		evt.Resolved += () => OnEventResolved(evt);
-		GD.Print($"[Round {Round}] Event started: {evt.Description}");
+		GD.Print($"[Round {Round} · Turn {TurnNumber}] Event started: {evt.Description}");
 	}
 
 	/// <summary>
-	/// Ends the acting seat's turn: it skips whatever is left of it and its
-	/// unspent energy is carried forward (docs/parity M1). Called by
+	/// Ends the acting seat's turn by **skipping**: it forfeits the rest of the
+	/// round and its unspent energy carries forward (docs/parity M1). Called by
 	/// <see cref="MbcPrototype.Core.GameManager.ApplyCommand"/> when a
 	/// <see cref="MbcPrototype.Simulation.CommandKind.Skip"/> command is applied,
 	/// never directly by input — the log has to know the turn ended.
@@ -190,7 +195,7 @@ public partial class TurnController : Node
 	{
 		if (IsOver || IsResolving || ActiveCombatant == null) return;
 
-		EndTurnNow();
+		EndTurnNow(forfeitsRound: true);
 	}
 
 	/// <summary>
@@ -210,13 +215,26 @@ public partial class TurnController : Node
 		EmitSignal(SignalName.MatchEnded, playerWon);
 	}
 
-	private void EndTurnNow()
+	/// <summary>
+	/// Ends the acting seat's turn. A seat that launched leaves the front of the
+	/// round's order for the back — it is not done for the round, it simply takes
+	/// its next turn after everyone else's. A seat that skipped, or that has been
+	/// defeated, leaves the order for good, and the round is over when nobody is
+	/// left in it.
+	/// </summary>
+	private void EndTurnNow(bool forfeitsRound)
 	{
 		IsPlayerTurn = false;
 		Combatant ended = ActiveCombatant;
 		ActiveCombatant = null;
 		ended?.EndTurn();
-		GD.Print($"[Round {Round}] {ended?.DisplayName ?? "?"}: turn over.");
+
+		_roundOrder.Remove(ended);
+		bool finished = forfeitsRound || ended == null || ended.IsDefeated;
+		if (!finished) _roundOrder.Add(ended);
+
+		GD.Print($"[Round {Round} · Turn {TurnNumber}] {ended?.DisplayName ?? "?"}: turn over"
+			+ (finished ? " — done for this round." : "."));
 		EmitSignal(SignalName.TurnEnded, ended);
 
 		if (EvaluateOutcome()) return;
@@ -227,64 +245,19 @@ public partial class TurnController : Node
 	private void OnEventResolved(TurnEvent evt)
 	{
 		if (!_pendingTurnEvents.Remove(evt)) return;
-		GD.Print($"[Round {Round}] Event resolved: {evt.Description}");
+		GD.Print($"[Round {Round} · Turn {TurnNumber}] Event resolved: {evt.Description}");
 
 		if (_pendingTurnEvents.Count > 0 || !IsResolving) return;
 
 		IsResolving = false;
-		GD.Print($"[Round {Round}] Resolution complete.");
+		GD.Print($"[Round {Round} · Turn {TurnNumber}] Resolution complete.");
 
 		if (EvaluateOutcome()) return;
 
-		// The seat may have lost its chain during its own turn (its own blast,
-		// most often): it is in no position to act again.
-		if (ActiveCombatant == null || ActiveCombatant.IsDefeated)
-		{
-			EndTurnNow();
-			return;
-		}
-
-		// The turn is not over: this is the budget model, so control returns to
-		// the same seat with whatever energy it has left (docs/parity M1). The
-		// announcement is deferred for the same reason the advance is: a
-		// destruction event resolves inside _ExitTree, and a replay - which acts
-		// the moment it is told to - would try to spawn a shot into the tree that
-		// is still being freed.
-		QueueResume();
-	}
-
-	/// <summary>
-	/// Tells the acting seat it may act again, at idle time. See <see cref="QueueAdvance"/>
-	/// for why the turn flow never calls back into the match from inside a
-	/// node's teardown.
-	/// </summary>
-	private void QueueResume()
-	{
-		if (_resumeQueued) return;
-
-		_resumeQueued = true;
-		Callable.From(ResumeTurnDeferred).CallDeferred();
-	}
-
-	private void ResumeTurnDeferred()
-	{
-		_resumeQueued = false;
-
-		// A new event may have been registered between the drain and this frame
-		// (a cascade registering the next generation): then the turn is resolving
-		// again, and its own drain will queue this.
-		if (IsOver || IsResolving || ActiveCombatant == null) return;
-
-		// The seat may have lost its chain in the meantime; it cannot act again.
-		if (ActiveCombatant.IsDefeated)
-		{
-			EndTurnNow();
-			return;
-		}
-
-		IsPlayerTurn = ActiveCombatant.IsPlayerControlled;
-		GD.Print($"[Round {Round}] {ActiveCombatant.DisplayName}: may act again.");
-		EmitSignal(SignalName.TurnResumed, ActiveCombatant);
+		// A turn is one launch: the shot has landed and done its damage, so this
+		// seat has had its turn. It keeps whatever energy is left for its next one,
+		// and the next seat acts now.
+		EndTurnNow(forfeitsRound: false);
 	}
 
 	/// <summary>
@@ -315,6 +288,28 @@ public partial class TurnController : Node
 	}
 
 	/// <summary>
+	/// Gives the turn to the seat at the front of the round's order, dropping
+	/// anything that can no longer act, and ends the round when nothing is left.
+	/// </summary>
+	private void AdvanceTurn()
+	{
+		for (int i = 0; i < _roundOrder.Count; i++)
+		{
+			if (_roundOrder[i] != null && !_roundOrder[i].IsDefeated) continue;
+			_roundOrder.RemoveAt(i);
+			i--;
+		}
+
+		if (_roundOrder.Count == 0)
+		{
+			EndRound();
+			return;
+		}
+
+		StartTurn(_roundOrder[0]);
+	}
+
+	/// <summary>
 	/// Begins <paramref name="combatant"/>'s turn and announces it. This node does
 	/// not act for a seat: the listener does — input for the human, the combatant's
 	/// own brain for an AI, a recorded command for a replay.
@@ -324,25 +319,10 @@ public partial class TurnController : Node
 		ActiveCombatant = combatant;
 		if (combatant == null) return;
 
+		TurnNumber++;
 		IsPlayerTurn = combatant.IsPlayerControlled;
-		GD.Print($"[Round {Round}] {combatant.DisplayName}: turn.");
+		GD.Print($"[Round {Round} · Turn {TurnNumber}] {combatant.DisplayName}: turn.");
 		EmitSignal(SignalName.TurnStarted, combatant);
-	}
-
-	/// <summary>
-	/// Moves to the next seat of this round, or ends the round when this was the
-	/// last one.
-	/// </summary>
-	private void AdvanceTurn()
-	{
-		_roundCursor++;
-		if (_roundCursor >= 0 && _roundCursor < _roundOrder.Count)
-		{
-			StartTurn(_roundOrder[_roundCursor]);
-			return;
-		}
-
-		EndRound();
 	}
 
 	/// <summary>
@@ -353,7 +333,7 @@ public partial class TurnController : Node
 	private void EndRound()
 	{
 		int finished = Round;
-		GD.Print($"[Round {finished}] Every seat has had its turn.");
+		GD.Print($"[Round {finished}] Every seat is out of turns — the round ends.");
 
 		// Income is the match's to pay; this is the announcement, not the payout.
 		EmitSignal(SignalName.RoundEnded, finished);
@@ -361,8 +341,8 @@ public partial class TurnController : Node
 		if (IsOver) return;
 
 		Round++;
+		TurnNumber = 0;
 		BuildRoundOrder();
-		_roundCursor = 0;
 
 		if (_roundOrder.Count == 0)
 		{

@@ -117,8 +117,28 @@ public partial class MatchCamera : Node
 	{
 		if (Camera != null)
 		{
-			Vector3 openingSeat = World != null ? World.SeatPosition(0) : Vector3.Zero;
-			_offset = Camera.GlobalPosition - new Vector3(openingSeat.X, 0f, openingSeat.Z);
+			// The offset is what the camera stands from the ground point it
+			// *centres*, not from its own position: an orthographic camera tilted
+			// 45° hangs a screen's worth of Z behind the spot at the middle of the
+			// screen, so measuring it from the camera body put every centred view
+			// about a full screen width to the right of its target. Read off the
+			// camera's own transform, so re-authoring the camera moves the view
+			// rather than silently breaking centring.
+			if (TryGetGroundLookAt(Camera, out Vector3 lookedAt))
+			{
+				_offset = Camera.GlobalPosition - lookedAt;
+			}
+			else
+			{
+				// A camera looking level never reaches the ground: fall back to the
+				// authored stand-off this project has always used.
+				_offset = new Vector3(0f, 15f, 15f);
+			}
+
+			// Open framed on the seat the match starts at (docs/parity M0.4) — the
+			// scene's own camera position is only what supplied the tilt and the
+			// stand-off above.
+			CenterOnImmediate(World != null ? World.SeatPosition(0) : Vector3.Zero);
 		}
 
 		CreateMinimap();
@@ -331,8 +351,7 @@ public partial class MatchCamera : Node
 		}
 
 		// Calculate destination based on ground position to keep height consistent
-		Vector3 groundLevel = new Vector3(targetPosition.X, 0, targetPosition.Z);
-		Vector3 destination = groundLevel + _offset;
+		Vector3 destination = GroundLevel(targetPosition) + _offset;
 
 		_cameraTween = GetTree().CreateTween();
 		_cameraTween.SetTrans(Tween.TransitionType.Expo); 
@@ -342,6 +361,54 @@ public partial class MatchCamera : Node
 		
 		// Optional: Ensure camera doesn't accidentally rotate
 		_cameraTween.Parallel().TweenProperty(Camera, "global_rotation", Camera.GlobalRotation, CameraSmoothTime);
+	}
+
+	/// <summary>
+	/// Centres the camera on <paramref name="targetPosition"/> with no tween: where
+	/// <see cref="CenterOn"/> travels to, applied at once. Used for the opening view,
+	/// where a tween from wherever the scene put the camera would be the first thing
+	/// the player sees.
+	/// </summary>
+	public void CenterOnImmediate(Vector3 targetPosition)
+	{
+		if (Camera == null) return;
+
+		if (_cameraTween != null && _cameraTween.IsValid())
+		{
+			_cameraTween.Kill();
+		}
+
+		Camera.GlobalPosition = GroundLevel(targetPosition) + _offset;
+	}
+
+	/// <summary>
+	/// The ground point at the middle of the screen, or false when the camera is
+	/// looking level and never reaches the ground.
+	///
+	/// This is what "centred on X" means for a tilted orthographic camera, and the
+	/// one answer both the centring offset and the minimap's view indicator read.
+	/// </summary>
+	private static bool TryGetGroundLookAt(Camera3D camera, out Vector3 groundPoint)
+	{
+		groundPoint = Vector3.Zero;
+		if (camera == null) return false;
+
+		Vector3 position = camera.GlobalPosition;
+		Vector3 forward = -camera.GlobalTransform.Basis.Z;
+		if (Mathf.Abs(forward.Y) < 0.001f) return false;
+
+		float distance = -position.Y / forward.Y;
+		if (distance < 0f) return false; // Looking away from the ground plane.
+
+		groundPoint = position + forward * distance;
+		groundPoint.Y = 0f;
+		return true;
+	}
+
+	/// <summary>The XZ of a world position dropped onto the ground plane.</summary>
+	private static Vector3 GroundLevel(Vector3 position)
+	{
+		return new Vector3(position.X, 0f, position.Z);
 	}
 
 	/// <summary>Converts a world-space XZ position to minimap pixel coordinates.</summary>
@@ -363,13 +430,9 @@ public partial class MatchCamera : Node
 	{
 		if (_minimapRect == null || _minimapViewIndicator == null || Camera == null) return;
 
-		// Ray from the main camera through the screen center down to the ground.
-		Vector3 camPos = Camera.GlobalPosition;
-		Vector3 forward = -Camera.GlobalTransform.Basis.Z;
-		if (Mathf.Abs(forward.Y) < 0.001f) return;
-		float t = -camPos.Y / forward.Y;
-		if (t < 0f) return; // Camera not looking at the ground plane.
-		Vector3 groundLookAt = camPos + forward * t;
+		// The ground point at the middle of the screen — the same one centring puts
+		// on the target (TryGetGroundLookAt).
+		if (!TryGetGroundLookAt(Camera, out Vector3 groundLookAt)) return;
 
 		// Project the camera's screen-space footprint onto the ground plane.
 		Vector3 up = Camera.GlobalTransform.Basis.Y;

@@ -171,7 +171,7 @@ closes; the **size** column is a rough ordering device, not a promise.
 | **Durability** | **hit points** per unit type (the manual's *Armor* column), damage subtracted, partial damage normal | per unit type, from the unit's own resource: `UnitDefinition.HitPoints` (Hub 5), read by `Structure.MaxHealth` | ✅ M0.2 |
 | **Blast damage** | a weapon damages what it strikes **and** what is near it, with a falloff curve nobody published | the two-band model survives, but every number in it is data: radii and damage on the unit, the band share on `MatchRules`; the Bomb does the manual's 3 | ✅ M0.2 |
 | **Energy** | 1/3/7 per unit, max 35, per-round refill, income units | a purse per combatant seeded from `MatchRules` (7), capped at 35, spent by `ApplyCommand` on the unit's `Level`, topped up at the round end by the main Hub (7) and Harvesters (3 on a pool, 1 off it), and carried forward | ✅ M1 |
-| **Turn model** | a turn is an energy budget; round ends when all have spent or skipped; order rotates left | one turn per seat per round, spent as a budget of builds until a skip ends it; a round ends when every seat has had its turn; income is paid and the order rotates left; the human seat has a 60 s clock whose expiry is a recorded skip (M1) | ✅ M1 |
+| **Turn model** | a turn is one launch; a round is every seat's turn in order, ending when all have spent out or skipped; order rotates left | **a turn is one launch**: its shot resolves and the next seat takes the next turn. A **round** is those turns alternating until every seat has spent out or skipped, with income paid and the order rotated left at its end; a skip forfeits the rest of the round and carries the energy forward. `TurnController` keeps the round and the turn-in-round as separate counters, and the human seat has a 60 s per-turn clock whose expiry is a recorded skip (M1) | ✅ M1 |
 | **Units** | 18, three levels | 3 of 12 as resources: `hub`, `harvester` and `bomb` in a `UnitCatalog`; `AmmoLauncher` takes a `UnitDefinition` and dispatches through `ILaunchedAmmo`; only a `Launcher`-traited structure (the Hub) may fire | **L** — nine units to go, and none of them needs a launcher change |
 | **Tunability** | (our own requirement, §2) | the roster, its numbers, the blast curve, the launch ballistics, the energy economy (cap, starting purse, Hub and Harvester income), the turn clock and the AI's profile are all resources; no gameplay number is left in a `.cs` file. The F1 dev overlay edits any of them live and writes them back, and `Scenes/harness.tscn --tune=…` does the same headlessly | ✅ M0.7, M1 |
 | **Players** | up to 4, teams, shared line of sight | exactly 2, hardcoded in `GameManager.CreateCombatants()` | **M** — generalise the shape, not the count |
@@ -386,18 +386,24 @@ This is the milestone that makes it *this genre* rather than a projectile duel,
 and it is worth doing before more units. Every number below is a starting value
 from §7, not a target.
 
-**What landed.** A turn is an energy budget. Each seat holds energy
-(`MatchRules.StartingEnergy` 7, cap `MaxStoredEnergy` 35); a build costs the
-unit's `Level`, and `GameManager.ApplyCommand` is the only place energy is spent
-— it checks the acting seat, that the origin is the seat's own **launcher** (the
-Hub's new `Launcher` trait; the Harvester has none), that the unit is buildable
-and affordable, and only charges after the shot has actually been launched. The
-seat may keep building while it can pay; the turn ends on a **Skip** command
-(`end_turn`, the menu's button, the clock running out, or nothing affordable),
-which carries the unspent energy forward. A **round** is one turn from every seat;
-at its end income is paid (see below), the round counter advances, and the order
-**rotates left by one seat**. The controller's `TurnResumed` signal is the new
-seam: after a shot resolves, the same seat may act again.
+**What landed.** **A turn is one launch, and a round is turns.** Each seat holds
+energy (`MatchRules.StartingEnergy` 7, cap `MaxStoredEnergy` 35); a build costs
+the unit's `Level`, and `GameManager.ApplyCommand` is the only place energy is
+spent — it checks the acting seat, that the origin is the seat's own **launcher**
+(the Hub's new `Launcher` trait; the Harvester has none), that the unit is
+buildable and affordable, and only charges after the shot has actually been
+launched. The shot resolves, the turn is over, and the **next seat** takes the
+next turn: turns **alternate** inside a round.
+
+A **round** is that alternation continued until every seat is out of turns. A seat
+is out when it **skips** — `end_turn`, the menu's button, the clock running out,
+or nothing in the roster being affordable — and a skip forfeits the rest of the
+round while carrying the unspent energy forward. The round ends when nobody is
+left to act: income is paid (see below), the round counter advances, the order
+**rotates left by one seat**, and the next round's turns begin. So the two
+counters mean different things and `TurnController` keeps them apart —
+`Round` moves with every income payout, `TurnNumber` with every launch — which is
+what the turn label and the round ledger read.
 
 **Income** is computed in one place, `NodeChainCombatant.ComputeIncome`: the
 chain's root Hub pays `MainHubIncome` (7 — a Hub built outward builds but does not
@@ -420,15 +426,18 @@ a countdown in the menu's strip. It pauses while a shot resolves, does not run i
 a replay, and on expiry submits a skip — so the timeout is part of the command log
 and a replay ends the turn at the same point.
 
-**The open question below is settled by reading one turn per round.** The manual's
-"skip all of your turns in the current round" reads as loose wording for a seat's
-turn in the round; one turn per seat per round, spent as a budget, is the shape
-that this milestone's UIs are built on and the one that keeps income and rotation
-simple. If playtesting says otherwise, "a turn is one build" is a change to
-`TurnController.EndTurn`'s trigger, not to the economy.
+**The open question below is settled: a turn is one launch.** The manual's "skip
+all of your turns in the current round" is read literally — a round holds several
+turns per seat, they alternate, and a skip forfeits the ones that are left. The
+first cut of M1 let one turn spend the whole purse as a budget of builds; it read
+as "you may do as much as fits in the clock", which is not the game. What that
+costs is a seat with 35 energy taking ten turns in a round, which is the point:
+the energy is spent a launch at a time, and every launch is answered by the other
+seat before the next one.
 
 - Energy pool per player: current, next-round income, **maximum 35**.
-- Unit cost = level = 1/3/7; spending energy replaces "one launch per turn".
+- Unit cost = level = 1/3/7; one launch per turn, paid out of the purse, so a full
+  purse is several turns — alternating with the opponent — not one big one.
 - A round ends when both players have spent out or skipped; energy then refills;
   **player order rotates left** each round.
 - **Skip** — forfeits the rest of the round's turns and carries all current
@@ -441,13 +450,11 @@ simple. If playtesting says otherwise, "a turn is one build" is a change to
   with `ChargeSpeed` is a good starting point).
 - **Turn clock**: per-move timer, default 60 s, with the HUD countdown.
 
-> **Open rules question — one turn, many launches?** The manual says the *round*
-> ends once all energy is used, and that Skip "skips all of your turns in the
-> current round" (plural). The natural reading is: one turn per player per round,
-> in which you may launch repeatedly until your energy is gone. Confirm against
-> the shipped game before building the turn loop, because the two readings
-> produce different UIs (a persistent build menu vs. a one-shot launcher). If it
-> is genuinely ambiguous, pick the one that is easier to tune and revisit.
+> **Settled: one turn, one launch.** The manual's plural "turns in the current
+> round" is what a round holds — a seat's turns alternate until its energy is
+> gone or it skips — and each of them is a single launch. The build menu
+> therefore stays up for the whole of a seat's round, re-opening at every one of
+> its turns, instead of being a one-shot launcher.
 
 **Exit criteria:** a full round can be played with correct income, spend,
 carry-over and rotation, using no units other than **Hubs and Harvesters** — and
@@ -460,9 +467,11 @@ on pool +3, Harvester 10 on pool +3) granted 13 → 19/35` — spend, on/off-poo
 income, carry-over and the rotation (`First to act: Enemy` … `First to act: You`)
 all visible in one run, and the state hash includes each seat's energy, so a replay
 proves the loop reproduced exactly. That run records (and replays to) state hash
-`14e62615617f13b9`; the default 10-round, seed-7 match hashes to
-`2c6d2a00819b84b2`, which is the M1 replacement for the M0 baseline. Changing a
-number moves the hash: `--tune=rules.MainHubIncome=20` and
+`c83c5a49e138bfd0`; the default 10-round, seed-7 match hashes to
+`2c6d2a00819b84b2`, which is the M1 replacement for the M0 baseline. (The default
+match's turns happen to be one launch each either way, which is why it survived
+the switch from a per-turn budget unchanged; the alternating-order run did not.)
+Changing a number moves the hash: `--tune=rules.MainHubIncome=20` and
 `--tune=harvester.Level=3` each land a different hash on a replayed log, as does
 `--tune=rules.StartingEnergy=0` or a cap low enough to bite (for example
 `rules.MaxStoredEnergy=8` on the 10-round log).
@@ -807,6 +816,7 @@ base should have, so that there is something solid to iterate on.
 - [x] Energy 1/3/7, max 35, per-round refill, carry-over
 - [x] Round ends when both players spend out or skip
 - [x] Player order shifts left each round
+- [x] A turn is one launch; a round is turns alternating until every seat is out
 - [x] Skip forfeits the round's remaining turns
 - [x] Hit points per unit type; damage subtracts; partial damage is normal
 - [x] A weapon damages what it strikes **and** what is near it, on a tunable curve

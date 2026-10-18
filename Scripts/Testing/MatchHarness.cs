@@ -222,8 +222,9 @@ public partial class MatchHarness : Node
 	/// <summary>
 	/// The harness's policy for the human's seat: build the first unit in the
 	/// roster the energy can pay for (docs/parity M1), from the launcher nearest
-	/// the enemy, or skip the rest of the turn when nothing is affordable. A fixed
-	/// policy is the point — the match has to be the same match twice.
+	/// the enemy, or skip the rest of the round when nothing is affordable. One
+	/// launch per turn is the rule, so this is one launch per call. A fixed policy
+	/// is the point — the match has to be the same match twice.
 	/// </summary>
 	private void SubmitPlayerAction()
 	{

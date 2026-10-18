@@ -8,16 +8,16 @@ namespace MbcPrototype.Presentation;
 /// <summary>
 /// The build menu: how a player chooses what to launch (docs/parity M1).
 ///
-/// It is the HUD's answer to the energy budget. Because a turn is no longer one
-/// shot, the player needs somewhere to browse the roster, see what they can pay
-/// for, and keep building until the energy runs out — so this panel is the
-/// primary affordance and the launch power meter sits under it while a unit is
-/// being aimed. It has two states:
+/// A turn is one launch, paid for out of an energy purse, so the player needs
+/// somewhere to browse the roster, see what they can pay for, and see what the
+/// next round will pay them — that is this panel, and the launch power meter sits
+/// under it while a unit is being aimed. It has two states:
 ///
 /// - **build** — the three pages (`1`, `3`, `7`) on top, the units of the page
 ///   below them as buttons (greyed out when they cost more than the player
 ///   holds), the energy readout and the turn clock in the header, and **End
-///   turn** for a player who would rather carry energy forward than spend it;
+///   turn** for a player who would rather carry energy forward than spend it this
+///   round;
 /// - **launch** — the menu steps aside and shows which unit is about to be
 ///   fired, its cost, and the charge level, with **Cancel** to go back to the
 ///   menu without spending anything.
@@ -43,6 +43,41 @@ public partial class BuildMenu : Control
 	private static readonly Color PanelColor = new Color(0.05f, 0.06f, 0.08f, 0.92f);
 
 	private static readonly Color PanelBorder = new Color(0.3f, 0.35f, 0.45f, 1f);
+
+	// ------------------------------------------------------------------
+	// Where the HUD block sits
+	//
+	// The menu is pinned to the **bottom-left corner of the screen** at a fixed
+	// size, not laid out around the middle: the bottom-right is the minimap's, the
+	// top-right the round label's and the top-left the control hints', and a panel
+	// that is positioned relative to the window's centre drifts to the middle of a
+	// large display and shrinks out of legibility at the default one. These are the
+	// numbers project.godot's 1920x1080 canvas stretch is applied to, so the block
+	// is the same on every display.
+	// ------------------------------------------------------------------
+
+	/// <summary>Gap from the screen's left edge, in canvas pixels.</summary>
+	private const float HudEdgeMargin = 12f;
+
+	/// <summary>
+	/// Gap from the bottom edge: the scene's power meter owns the bottom 20 px, so
+	/// the strip sits just above it rather than under it.
+	/// </summary>
+	private const float HudBottomMargin = 28f;
+
+	private const float StatusWidth = 380f;
+	// Tall enough for the 20/24 px labels with the panel's own margins, so the
+	// strip never has to grow into the panel above it.
+	private const float StatusHeight = 50f;
+
+	private const float BuildPanelWidth = 720f;
+	private const float BuildPanelHeight = 188f;
+
+	private const float LaunchPanelWidth = 600f;
+	private const float LaunchPanelHeight = 168f;
+
+	/// <summary>Gap between the status strip and the panel above it.</summary>
+	private const float PanelGap = 8f;
 
 	private IReadOnlyList<UnitDefinition> _buildable = System.Array.Empty<UnitDefinition>();
 
@@ -106,23 +141,37 @@ public partial class BuildMenu : Control
 	public void Build()
 	{
 		Name = "BuildMenu";
+		// The root has to actually cover the viewport: every panel below anchors to
+		// this rect (a Control under a CanvasLayer reaches the viewport *through*
+		// its own rect). The anchors preset alone does not do it — it keeps the
+		// node's current rect in the offsets, and this node enters the tree at 0×0,
+		// which left the whole menu laid out against an empty rect and off-screen.
 		SetAnchorsPreset(LayoutPreset.FullRect);
+		OffsetLeft = 0f;
+		OffsetTop = 0f;
+		OffsetRight = 0f;
+		OffsetBottom = 0f;
+
 		// A full-rect Control would otherwise swallow every click meant for the
 		// world; only the panels themselves take the mouse.
 		MouseFilter = MouseFilterEnum.Ignore;
 
 		// The energy/clock strip stays up through both states, so the clock and
-		// the purse are readable while aiming too; it sits just above the scene's
-		// power meter, which owns the bottom 20 pixels.
-		_statusPanel = MakePanel(-360f, -58f, 360f, -26f);
+		// the purse are readable while aiming too; it sits in the corner above the
+		// scene's power meter, which owns the bottom 20 pixels.
+		_statusPanel = MakePanel(StatusWidth, StatusHeight, HudBottomMargin);
 		AddChild(_statusPanel);
 		BuildStatusContents();
 
-		_buildPanel = MakePanel(-360f, -250f, 360f, -62f);
+		// The two panel states share the space above the strip — they are never on
+		// screen together.
+		float stacked = HudBottomMargin + StatusHeight + PanelGap;
+
+		_buildPanel = MakePanel(BuildPanelWidth, BuildPanelHeight, stacked);
 		AddChild(_buildPanel);
 		BuildPanelContents();
 
-		_launchPanel = MakePanel(-300f, -212f, 300f, -62f);
+		_launchPanel = MakePanel(LaunchPanelWidth, LaunchPanelHeight, stacked);
 		AddChild(_launchPanel);
 		BuildLaunchContents();
 
@@ -199,7 +248,7 @@ public partial class BuildMenu : Control
 		}
 		if (_costHint != null && _pageUnits.Count > 0)
 		{
-			_costHint.Text = $"{PageTitle}   ·   Q/E pick   ·   Enter build   ·   Space end turn";
+			_costHint.Text = $"{PageTitle}   ·   Q/E pick   ·   Enter build   ·   Space skip";
 		}
 
 		for (int i = 0; i < _unitButtons.Count && i < _pageUnits.Count; i++)
@@ -266,18 +315,30 @@ public partial class BuildMenu : Control
 	// Layout
 	// ------------------------------------------------------------------
 
-	private PanelContainer MakePanel(float left, float top, float right, float bottom)
+	/// <summary>
+	/// Builds one panel of the HUD block: a fixed-size box pinned to the left edge
+	/// and standing <paramref name="bottomMargin"/> pixels above the bottom of the
+	/// screen. Anchored to the corner rather than to the centre, and growing up and
+	/// to the right when its contents outgrow the authored size — off the top and
+	/// the right of the screen, never off the bottom-left corner it is pinned to.
+	/// </summary>
+	/// <param name="width">Width in canvas pixels.</param>
+	/// <param name="height">Height in canvas pixels.</param>
+	/// <param name="bottomMargin">Distance from the bottom of the screen to the panel's bottom edge.</param>
+	private PanelContainer MakePanel(float width, float height, float bottomMargin)
 	{
 		var panel = new PanelContainer
 		{
-			AnchorLeft = 0.5f,
-			AnchorRight = 0.5f,
+			AnchorLeft = 0f,
+			AnchorRight = 0f,
 			AnchorTop = 1f,
 			AnchorBottom = 1f,
-			OffsetLeft = left,
-			OffsetTop = top,
-			OffsetRight = right,
-			OffsetBottom = bottom,
+			OffsetLeft = HudEdgeMargin,
+			OffsetRight = HudEdgeMargin + width,
+			OffsetTop = -bottomMargin - height,
+			OffsetBottom = -bottomMargin,
+			GrowHorizontal = GrowDirection.End,
+			GrowVertical = GrowDirection.Begin,
 			MouseFilter = MouseFilterEnum.Stop,
 		};
 
@@ -332,7 +393,14 @@ public partial class BuildMenu : Control
 		bottom.AddThemeConstantOverride("separation", 10);
 		column.AddChild(bottom);
 
-		var endTurn = new Button { Text = "End turn  (Space)", CustomMinimumSize = new Vector2(160f, 0f) };
+		// Skipping forfeits the rest of the round (docs/parity M1), so the button
+		// says what it does rather than implying a single turn is all it ends.
+		var endTurn = new Button
+		{
+			Text = "Skip round  (Space)",
+			CustomMinimumSize = new Vector2(160f, 0f),
+			TooltipText = "forfeits the rest of the round; your energy carries over",
+		};
 		endTurn.Pressed += () => EndTurnRequested?.Invoke();
 		bottom.AddChild(endTurn);
 
@@ -341,6 +409,9 @@ public partial class BuildMenu : Control
 			Text = "",
 			SizeFlagsHorizontal = SizeFlags.ExpandFill,
 			AutowrapMode = TextServer.AutowrapMode.WordSmart,
+			// Room for two wrapped lines whatever width it is measured at, so the
+			// panel's minimum height cannot depend on when it was first laid out.
+			CustomMinimumSize = new Vector2(0f, 44f),
 			Modulate = new Color(0.82f, 0.85f, 0.9f),
 		};
 		bottom.AddChild(_costHint);
@@ -360,11 +431,15 @@ public partial class BuildMenu : Control
 		_launchPower.AddThemeFontSizeOverride("font_size", 18);
 		column.AddChild(_launchPower);
 
+		// Two explicit lines rather than one autowrapped one: a panel that is being
+		// built is 0 px wide, and an autowrapped label measured at that width asks
+		// for a column thousands of pixels tall — which the panel then keeps as its
+		// minimum height and never sheds (the launch panel opened off the top of the
+		// screen). A short fixed title block cannot do that.
 		var hint = new Label
 		{
-			Text = "A/D aim   ·   hold W to charge, release to launch   ·   Esc cancels back to the menu",
+			Text = "A/D aim   ·   hold W to charge, release to launch\nEsc cancels back to the menu",
 			HorizontalAlignment = HorizontalAlignment.Center,
-			AutowrapMode = TextServer.AutowrapMode.WordSmart,
 			Modulate = new Color(0.82f, 0.85f, 0.9f),
 		};
 		column.AddChild(hint);

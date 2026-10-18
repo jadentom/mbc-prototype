@@ -1,9 +1,11 @@
 # Camera
 
 Camera system for **MbcPrototype** — centering, screen-edge panning, and the
-runtime-built minimap. All of it lives in `Scripts/Core/GameManager.cs` (the
-camera-related members are grouped under the `Camera: minimap & screen-edge
-panning` section; the main camera is exported as `MainCamera`).
+runtime-built minimap. All of it lives in
+[`Scripts/Presentation/MatchCamera.cs`](../Scripts/Presentation/MatchCamera.cs),
+the match's view (docs/parity M0.6); `GameManager` hands it the main camera, the
+UI layer, the world and the structures each frame, and it changes nothing about
+the match.
 
 ## Main camera
 
@@ -11,17 +13,24 @@ panning` section; the main camera is exported as `MainCamera`).
 - Its serialized `Transform3D` in `Scenes/main_scene.tscn` is easy to misread —
   verify against the runtime basis if it matters (confirmed: forward =
   `(0, -0.7071, -0.7071)`, screen-up projects to -Z on the ground).
-- `_cameraOffset` is computed in `_Ready` from the starting `Structure`
-  position (fallback `(0, 15, 15)`).
+- `_cameraOffset` is the **stand-off between the camera body and the ground point
+  at the middle of the screen**, read off the camera's own transform in
+  `Build()` (`TryGetGroundLookAt`, fallback `(0, 15, 15)`). It is *not* measured
+  from the camera's position to the target: with the scene's ~45° tilt the camera
+  hangs `(0, 10, 10)` *behind* the spot it centres, so measuring from the body put
+  every centred view 50 world units — about a full screen width — to the right of
+  its target, on node clicks and minimap clicks alike. `Build()` then puts the
+  camera on `seat0 + offset`, so the match opens framed on the seat the map says.
 
 ## Centering
 
-- `CenterCameraOn(target)` tweens `MainCamera` to `target.XZ + _cameraOffset`
+- `CenterOn(target)` tweens `MainCamera` to `target.XZ + _cameraOffset`
   (Expo-out ease over `CameraSmoothTime` seconds) and pins `global_rotation`
-  so the camera never accidentally rotates.
+  so the camera never accidentally rotates. `CenterOnImmediate()` is the same
+  destination with no tween, for the opening view.
 - The tween is stored in `_cameraTween` and **killed whenever the player pans**,
-  so panning never fights centering. `SelectStructure()` and minimap clicks both
-  route through `CenterCameraOn()`.
+  so panning never fights centering. `SelectStructure()`, minimap clicks and
+  `FollowActingCombatant()` all route through `CenterOn()`.
 
 ## Edge panning
 
@@ -56,7 +65,8 @@ The resulting position is clamped to `PanBoundsMin`/`PanBoundsMax`.
 Features:
 
 - translucent white rectangle = the main camera's view footprint
-  (`UpdateMinimapViewIndicator()`);
+  (`UpdateMinimapViewIndicator()`, which centres on the same ground point
+  centring does — one answer, `TryGetGroundLookAt`, for both);
 - flat pool markers = one per purple pool, in a steady colour that never pulses
   (`UpdateMinimapPoolMarkers()`, drawn under the cables and the dots). The pools'
   *3D* geometry is on `PurplePool.WorldRenderLayer`, which this camera has cleared
@@ -84,6 +94,13 @@ rescales the whole minimap from those two spots; nothing else knows the size.
 
 - **Pan vs tween**: panning kills the in-flight centering tween; never let the
   two fight.
+- **The offset is a stand-off from the ground look-at point, not from the camera
+  body.** A tilted orthographic camera looks at the ground at
+  `position + forward × (−position.Y / forward.Y)`, which is a screen's worth of Z
+  in front of where it hangs. Anything that wants "centre the view on X" (a node
+  click, a minimap click, the view indicator, the opening frame) has to be in
+  those terms — the two were mixed once and every centred view landed a screen to
+  the right.
 - **Cursor-inside-window**: edge panning only runs while the OS cursor is
   inside the window — keep that invariant when touching the camera.
 - `SubViewport` minimap: `GuiDisableInput=true` and

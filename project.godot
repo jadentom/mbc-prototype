@@ -15,6 +15,19 @@ run/main_scene="uid://ntoepobspfl6"
 config/features=PackedStringArray("4.5", "C#", "GL Compatibility")
 config/icon="res://icon.svg"
 
+[display]
+
+; The HUD is laid out in a 1920x1080 canvas and scaled to the window, so the
+; build menu's fixed corner placement is the same block on a laptop panel and on
+; a 4K display instead of a speck in the middle of the screen. "expand" keeps the
+; extra width/height of an unusual aspect ratio as extra canvas, so the panels
+; stay pinned to the screen edge they are anchored to. 3D is rendered at the
+; window's own resolution — this scales the 2D canvas, not the world.
+window/size/viewport_width=1920
+window/size/viewport_height=1080
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
 [dotnet]
 
 project/assembly_name="MbcPrototype"

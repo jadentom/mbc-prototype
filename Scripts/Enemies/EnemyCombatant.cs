@@ -14,13 +14,13 @@ namespace MbcPrototype.Enemies;
 /// from input.
 ///
 /// Every number it plays by lives in its <see cref="Profile"/> (docs/parity §7),
-/// so there is no enemy tuning in this file or anywhere above it. It spends its
-/// turn's energy the way the player does (docs/parity M1): it plans one build,
-/// releases it after the profile's think time, and when the shot has resolved it
-/// plans the next one — until nothing in the roster is affordable, at which
-/// point it skips and carries the rest of its purse forward. It works through
-/// the catalog's buildable units in order; there is deliberately no judgement in
-/// it, because docs/parity M6 is where the real planner lands.
+/// so there is no enemy tuning in this file or anywhere above it. It also plays by
+/// the same turn rule as the player: **a turn is one launch** (docs/parity M1), so
+/// it plans one build, releases it after the profile's think time, and its turn is
+/// over when the shot resolves — the next turn belongs to the next seat. It skips
+/// (forfeiting the rest of the round) when nothing in the roster is affordable.
+/// It works through the catalog's buildable units in order; there is deliberately
+/// no judgement in it, because docs/parity M6 is where the real planner lands.
 /// </summary>
 public partial class EnemyCombatant : NodeChainCombatant
 {
@@ -59,9 +59,9 @@ public partial class EnemyCombatant : NodeChainCombatant
 	private int _nextUnitIndex;
 
 	/// <summary>
-	/// Plans the next build of this turn — or skips, when nothing in the roster is
-	/// affordable (docs/parity M1: "spent out" ends a turn). Called when the turn
-	/// starts and again every time the previous shot resolves.
+	/// Plans this turn's build — one launch, which is all a turn is (docs/parity
+	/// M1) — or skips, when nothing in the roster is affordable ("spent out"
+	/// forfeits the rest of the round).
 	/// </summary>
 	public override void BeginTurn()
 	{
@@ -84,9 +84,10 @@ public partial class EnemyCombatant : NodeChainCombatant
 		UnitDefinition planned = ChooseAffordableUnit(buildable);
 		if (planned == null)
 		{
-			// Every unit in the roster costs more than the energy left: the budget
-			// is spent out, so the turn ends and the energy carries forward.
-			GD.Print($"[Enemy] {DisplayName}: {Energy} energy buys nothing — skipping the rest of the turn.");
+			// Every unit in the roster costs more than the energy left: the purse
+			// is spent out, so the enemy passes for the rest of the round and the
+			// energy carries forward.
+			GD.Print($"[Enemy] {DisplayName}: {Energy} energy buys nothing — skipping the rest of the round.");
 			SubmitSkip();
 			return;
 		}
@@ -136,8 +137,8 @@ public partial class EnemyCombatant : NodeChainCombatant
 
 		// If nothing could be launched (no ammo scene, dead origin) no TurnEvent
 		// was registered and the rotation would wait forever — skip the turn. When
-		// a shot *did* go out, the turn resumes here when it resolves, and
-		// BeginTurn plans the next build.
+		// a shot *did* go out, the turn is over the moment it resolves: a turn is
+		// one launch (docs/parity M1).
 		if (!(GameManager.Instance?.IsResolvingTurn ?? false)) SubmitSkip();
 	}
 

@@ -147,8 +147,20 @@ public partial class GameManager : Node
 	/// <summary>The combatant whose turn it currently is (null between turns).</summary>
 	public Combatant ActiveCombatant => Turns?.ActiveCombatant;
 
-	/// <summary>The combatant whose turn it currently is (null between turns).</summary>
+	/// <summary>
+	/// The round being played — **not** the turn: a round holds one turn per seat
+	/// until every seat is out of turns, and energy is paid at its end (docs/parity
+	/// M1). It is what <see cref="Structure.DisableFor"/> counts in and what the
+	/// command log's ledger is read against.
+	/// </summary>
 	public int CurrentTurn => Turns?.Round ?? 1;
+
+	/// <summary>
+	/// Which turn of the round is being played, counting from 1. Turns alternate
+	/// inside a round, so this is the number that moves with every launch; the
+	/// round is the one that moves with every income payout.
+	/// </summary>
+	public int CurrentTurnNumber => Turns?.TurnNumber ?? 0;
 
 	/// <summary>True while the player may pick units, aim, charge and fire.</summary>
 	public bool IsPlayerTurn => Turns?.IsPlayerTurn ?? false;
@@ -302,7 +314,6 @@ public partial class GameManager : Node
 		Turns = new TurnController { Name = "TurnController" };
 		AddChild(Turns);
 		Turns.TurnStarted += OnTurnStarted;
-		Turns.TurnResumed += OnTurnResumed;
 		Turns.TurnCommitted += OnTurnCommitted;
 		Turns.TurnEnded += OnTurnEnded;
 		Turns.RoundEnded += OnRoundEnded;
@@ -315,10 +326,11 @@ public partial class GameManager : Node
 		};
 		AddChild(Setup);
 
-		// The build menu is the HUD's answer to the energy budget (docs/parity
-		// M1). It is built here from the roster rather than authored in the scene,
-		// like the minimap: a unit in the catalog gets a button on its level's
-		// page without anyone editing the scene.
+		// The build menu is the HUD's answer to a turn being a launch paid for out
+		// of an energy purse (docs/parity M1). It is built here from the roster
+		// rather than authored in the scene, like the minimap: a unit in the
+		// catalog gets a button on its level's page without anyone editing the
+		// scene.
 		Menu = new BuildMenu();
 		UiLayer?.AddChild(Menu);
 		Menu.Build();
@@ -491,7 +503,7 @@ public partial class GameManager : Node
 
 		if (!CanBuildAnything(combatant))
 		{
-			GD.Print($"[Round {CurrentTurn}] {combatant.DisplayName}: {combatant.Energy} energy buys nothing — ending the turn.");
+			GD.Print($"[Round {CurrentTurn}] {combatant.DisplayName}: {combatant.Energy} energy buys nothing — skipping the rest of the round.");
 			SkipTurn();
 			return;
 		}
@@ -705,7 +717,7 @@ public partial class GameManager : Node
 			if (IsResolvingTurn)
 			{
 				// The shot is in the air: the menu stays out of the way until it
-				// resolves, and the turn resumes with whatever energy is left.
+				// resolves, and then the turn is over — it was one launch.
 				Menu?.HidePanels();
 				HideAimIndicator();
 			}
@@ -836,35 +848,6 @@ public partial class GameManager : Node
 	}
 
 	/// <summary>
-	/// The shot a turn registered has resolved: the same seat may act again from
-	/// its remaining energy (docs/parity M1). This is *not* a new turn, so the
-	/// turn clock keeps going rather than restarting.
-	/// </summary>
-	private void OnTurnResumed(Combatant combatant)
-	{
-		if (combatant == null) return;
-
-		if (IsReplaying)
-		{
-			PlayNextReplayCommand(combatant);
-			return;
-		}
-
-		if (combatant.IsPlayerControlled)
-		{
-			Turns.IsPlayerTurn = true;
-			BeginPlayerTurn(combatant);
-		}
-		else
-		{
-			combatant.BeginTurn();
-		}
-
-		UpdateTurnLabel();
-		UpdateHud();
-	}
-
-	/// <summary>
 	/// The turn committed — nothing the player had in progress survives it. The
 	/// turn controller locks control; this is the player's half of that.
 	/// </summary>
@@ -934,7 +917,7 @@ public partial class GameManager : Node
 	private NodeChainCombatant HumanChain => HumanCombatant as NodeChainCombatant;
 
 	/// <summary>
-	/// Registers an event that must resolve before the acting seat may act again,
+	/// Registers an event that must resolve before the acting seat's turn is over,
 	/// and commits the turn when it is the first (docs/parity M0.5: a turn is not
 	/// over until its shot has landed).
 	/// </summary>
@@ -1257,8 +1240,9 @@ public partial class GameManager : Node
 			GD.Print($"[Round {CurrentTurn}] {combatant.DisplayName}: replaying {command.Describe()}.");
 			ApplyCommand(command);
 
-			// The shot has to land before the seat may act again — the rotation
-			// announces that with TurnResumed, which comes back here.
+			// The shot has to land before the turn is over; the rotation then gives
+			// the next turn to the next seat, which comes back here through
+			// OnTurnStarted.
 			if (IsResolvingTurn) return;
 
 			// A skip has moved the match on to another seat's turn.
@@ -1375,7 +1359,11 @@ public partial class GameManager : Node
 		_structures.Remove(structure);
 	}
 
-	/// <summary>Shows the round number and whose move it is.</summary>
+	/// <summary>
+	/// Shows the round, which turn of it this is, and whose move it is. The two
+	/// counters are separate on purpose (docs/parity M1): the turn moves with every
+	/// launch, the round moves with every income payout.
+	/// </summary>
 	private void UpdateTurnLabel()
 	{
 		if (TurnLabel == null) return;
@@ -1393,7 +1381,7 @@ public partial class GameManager : Node
 		}
 
 		string whose = ActiveCombatant.IsPlayerControlled ? "your move" : $"{ActiveCombatant.DisplayName}'s move";
-		TurnLabel.Text = $"Round {CurrentTurn} — {whose} — {ActiveCombatant.Energy} energy";
+		TurnLabel.Text = $"Round {CurrentTurn} · Turn {CurrentTurnNumber} — {whose} — {ActiveCombatant.Energy} energy";
 	}
 
 	/// <summary>

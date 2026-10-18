@@ -129,8 +129,8 @@ public abstract partial class Combatant : Node
 	/// <summary>
 	/// Called by the GameManager when this combatant's turn begins. A
 	/// player-controlled combatant just waits for input; an AI combatant
-	/// starts acting here (and must eventually submit a build, or skip the
-	/// rest of the turn, or both).
+	/// starts acting here (and must eventually submit one build — a turn is one
+	/// launch — or skip the rest of the round).
 	/// </summary>
 	public abstract void BeginTurn();
 

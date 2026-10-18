@@ -11,14 +11,17 @@ prototype built with **Godot 4.5.1 (C#/.NET)**. Read this before editing.
   player and one AI enemy each control a chain of structures, build from a
   roster, and take turns. A shot resolves only after every in-flight event
   completes.
-- **A turn is an energy budget** (docs/parity M1). Each seat holds energy (start
-  7, cap 35), spends it on builds — a unit's level *is* its cost, 1/3/7 — and may
-  keep building while it can pay. The turn ends when the seat **skips** (Space:
-  the rest of the energy carries forward) or when nothing in the roster is
-  affordable. A **round** is one turn from every seat; at its end the seats are
-  paid their income (main Hub 7, Harvesters 3 on a pool / 1 off it), and the
-  order **rotates left** so the seat that went first goes last next round. The
-  human has a per-turn clock (60 s) whose expiry is a recorded skip.
+- **A turn is one launch, and a round is turns** (docs/parity M1) — the two are
+  separate counters, and `TurnController` keeps them apart. Each seat holds
+  energy (start 7, cap 35) and a unit's level *is* its cost, 1/3/7; one turn
+  spends it on exactly one build, the shot resolves, and the **next seat** takes
+  the next turn. A **round** is those turns alternating until every seat is out
+  of turns: a seat is out when it **skips** (Space, the clock running out, or
+  nothing in the roster being affordable), which forfeits the rest of its round
+  and carries its energy forward. At the round's end the seats are paid their
+  income (main Hub 7, Harvesters 3 on a pool / 1 off it) and the order
+  **rotates left** so the seat that went first goes last next round. The human
+  has a per-turn clock (60 s) whose expiry is a recorded skip.
 - Both sides are the **same kind of thing** (`Combatant`): identical structures,
   the same roster, the same launch path, the same energy economy and the same
   defeat rule. The only difference is where the aim and power come from (input
@@ -81,7 +84,7 @@ World (Node3D)
     ├── FireStrengthBar (ProgressBar)      # bottom, full width — the launch
     │                                      #   power meter
     ├── Label                              # control hints, top-left
-    ├── TurnLabel                          # top-right, round, whose move, energy
+    ├── TurnLabel                          # top-right: round · turn, whose move, energy
     ├── DefeatLabel                        # centered, hidden until defeat
     ├── VictoryLabel                       # centered, hidden until victory
     └── RestartLabel                       # centered, hidden until game over
@@ -105,10 +108,34 @@ not stored in the scene. See [docs/camera](docs/camera/README.md).
 
 The **build menu** is built at runtime too, by `BuildMenu.Build()` from the
 catalog: the energy/clock strip, the `1`/`3`/`7` pages, the page's unit buttons
-and the End turn button, plus the launch view's unit/cost/power readout. A unit
+and the Skip round button, plus the launch view's unit/cost/power readout. A unit
 added to the roster therefore gets a button on its level's page with no scene
 edit, and a level with no unit gets no page. It is added under the scene's `UI`
 CanvasLayer, so the scene does not list it.
+
+Its panels are pinned to the **bottom-left corner at a fixed size** (the edge
+margins are constants at the top of `BuildMenu`, and `project.godot` lays the HUD
+out in a 1920×1080 canvas that is stretched to the window) — the minimap owns the
+bottom-right, the turn label the top-right and the control hints the top-left.
+Do not position HUD panels relative to the viewport's centre: on a large display
+that puts them in the middle of the screen, and at the default window size it
+shrinks them out of legibility.
+
+Two traps that cost a debugging session each, both worth knowing before adding a
+panel:
+
+- **A `Control` under a `CanvasLayer` reaches the viewport through its own
+  rect.** `SetAnchorsPreset(LayoutPreset.FullRect)` on its own leaves the node at
+  whatever size it had — 0×0 for a code-built root added this frame — because the
+  preset keeps the current rect in the offsets. The build menu's panels anchored
+  to a 0×0 parent and lived off the top of the screen until the offsets were
+  zeroed explicitly after the preset. Give the root its rect, then anchor the
+  panels to it.
+- **A hidden autowrapped `Label` measures itself at zero width** and asks for a
+  column thousands of pixels tall. A container keeps that as its minimum size, so
+  the panel grows to it the moment it is shown — the launch panel opened off the
+  top of the screen. Use explicit line breaks (or a fixed `CustomMinimumSize`)
+  instead of `AutowrapMode` in a panel that is built before it is shown.
 
 ## Core scripts
 
@@ -116,7 +143,7 @@ CanvasLayer, so the scene does not list it.
 | --- | --- |
 | `Scripts/Core/GameManager.cs` | The match's entry point and **facade** (docs/parity M0.6): the player's build/launch input and the turn clock, the HUD, selection, the command log (including energy spending and skips) and the structure registry. It builds the parts below in `_Ready` and forwards to them, which is why call sites still say `GameManager.Instance`. |
 | `Scripts/Core/MatchSetup.cs` | **Builds the match**: resolves the roster/rules, settles the seed and the command log, and creates **one combatant per seat the map defines** (seat 0 is the human's, the rest are AI). Owns `Catalog`, `Rules`, `Seed`, `Random`, `Commands`, `Combatants`. |
-| `Scripts/TurnSystem/TurnController.cs` | **The turn flow** (M1: an energy budget, not one shot): the rotation, the round, the pending `TurnEvent`s and the outcome. It announces `TurnStarted`, `TurnResumed` (the same seat may build again), `TurnEnded`, `RoundEnded` and `MatchEnded`, and does not act for a seat — input, the AI or a replay does. |
+| `Scripts/TurnSystem/TurnController.cs` | **The turn flow** (M1: a turn is one launch, a round is turns): the rotation, the round and the turn inside it (`Round`, `TurnNumber`), the pending `TurnEvent`s and the outcome. It announces `TurnStarted`, `TurnCommitted`, `TurnEnded`, `RoundEnded` and `MatchEnded`, and does not act for a seat — input, the AI or a replay does. |
 | `Scripts/Presentation/BuildMenu.cs` | **The build menu** (docs/parity M1): the pages, the unit buttons, the energy and next-round income, the turn clock, and the launch view's unit/cost/power readout. Built in code from the roster; it owns no match state and only reports what the player asked for. |
 | `Scripts/Presentation/MatchCamera.cs` | **The view**: centering, edge panning, and the whole minimap (widget, coordinates, structure markers, pool markers, connection lines). Read-only over the match: it is handed the structures each frame. |
 | `Scripts/World/MatchWorld.cs` | **The world**: the map it loaded, the bounds the minimap and the pools use, the pools themselves, and where each seat starts. |
@@ -125,7 +152,7 @@ CanvasLayer, so the scene does not list it.
 | `Scripts/Core/PlayerCombatant.cs` | The human's combatant: a `NodeChainCombatant` whose aim/charge/fire comes from input in `GameManager`. |
 | `Scripts/TurnSystem/Combatant.cs` | Abstract turn participant (team, defeat rule, `BeginTurn`/`EndTurn`) **and the energy purse**: current energy, its cap from the rules, `CanAfford`/`SpendEnergy`, the round's income grant. The rotation only ever talks to this. |
 | `Scripts/TurnSystem/NodeChainCombatant.cs` | Combatant built from a chain of structures: structure registry, root lookup (`FindRootStructure()`, which follows the cords), defeat check, `Launch()`, `SubmitSkip()`, launcher lookup (`FindLauncherNearestTo`, `CanLaunchFrom`), the round's `ComputeIncome()` and the `RootUnit` definition its root spawns with. |
-| `Scripts/Enemies/EnemyCombatant.cs` | The AI enemy: spends its turn's energy like the player — plans the first affordable buildable unit (working through the roster), fires it after its `Profile`'s think time, plans the next when the shot resolves, and skips when nothing is affordable. Every number it plays by is the profile's, not its own. |
+| `Scripts/Enemies/EnemyCombatant.cs` | The AI enemy: plays by the player's rules — one turn, one launch — planning the first affordable buildable unit (working through the roster), firing it after its `Profile`'s think time, and skipping (for the rest of the round) when nothing is affordable. Every number it plays by is the profile's, not its own. |
 | `Scripts/Units/UnitDefinition.cs` | **What a unit is**: the resource holding its numbers — level/energy cost, hit points, damage, blast radii, vision, build permission, icon, and the ammo scene. It replaces the old `AmmoType` enum. |
 | `Scripts/Units/UnitCatalog.cs` | The roster: the one list of units the HUD, the launcher and the AI read. `Find(id)`, `Buildable`, `Validate()`. |
 | `Scripts/Units/UnitTraits.cs` | `UnitTraits { Structure, Weapon, Launcher, Hub, Harvester }` — what a unit is, for code that does not know it by name. |
@@ -139,7 +166,7 @@ CanvasLayer, so the scene does not list it.
 | `Scripts/Combat/Projectile.cs` | Ammo: a ballistic body that deploys a `Structure` carrying its unit's definition where it lands, and resolves a `TurnEvent`. |
 | `Scripts/Combat/Bomb.cs` | Ammo: a ballistic body that detonates on contact and damages every `Structure` in its unit's blast radii (see *Unit data & the blast*), resolving a `TurnEvent`. |
 | `Scripts/Combat/BlastVisual.cs` | A blast's visuals: expanding translucent spheres over the damage radii, plus a ground marker (disc + a ring per radius) showing where they landed. Built in code, spawned by `Bomb`. |
-| `Scripts/TurnSystem/TurnEvent.cs` | One unit of turn resolution; control returns to the acting seat when all pending events resolve. |
+| `Scripts/TurnSystem/TurnEvent.cs` | One unit of turn resolution; the turn is over — and the next seat's turn begins — when all pending events resolve. |
 | `Scripts/World/PoolField.cs` | The map's purple pools: a fixed, grid-free scatter over the ground, one per-frame loop that pulses them all, and the pool queries future collision checks will use. |
 | `Scripts/World/PurplePool.cs` | One purple pool: a solid rounded square of energy with a rim of dead grass around it, pulsing between a resting violet and a bright glow. Knows its own footprint (`ContainsXZ`/`OverlapsXZ`). |
 | `Scripts/Simulation/MatchCommand.cs` | **One action, as data**: a `Launch` (seat, unit id, origin structure id, aim, power) or a `Skip` (seat only — end the turn, carry the energy). Serializes to a dictionary; names things by id, never by reference. |
@@ -260,35 +287,41 @@ rotation, and `GameManager` decides who acts for each seat.
   match; `1v1` is what today's map says, not an assumption in the code (§1,
   *Built for expansion*). Adding a different *kind* of combatant means deriving
   from `Combatant` in there.
-- **A seat's turn is an energy budget** (docs/parity M1). `TurnController.StartTurn()`
-  announces `TurnStarted`; the seat builds while it can pay; each build registers a
-  `TurnEvent`, and when the last one resolves the controller announces
-  `TurnResumed` — the **same** seat may build again. The turn ends only when a
-  `Skip` command is applied (`GameManager.SkipTurn()` submits it: Space, the clock
-  running out, or nothing affordable) — `EndTurn()` then advances the round order.
-  `GameManager.OnTurnStarted`/`OnTurnResumed` decide who acts: a replayed command
+- **A turn is one launch** (docs/parity M1). `TurnController.StartTurn()`
+  announces `TurnStarted`; the seat builds once; the build registers a
+  `TurnEvent`, and when the last pending event resolves the turn is over and the
+  seat goes to the back of the round's order. Nothing about a turn is a budget:
+  ten energy is several turns, each answered by the other seat, not one big one.
+  A `Skip` command (`GameManager.SkipTurn()` submits it: Space, the clock running
+  out, or nothing affordable) forfeits the rest of the round instead.
+  `GameManager.OnTurnStarted` decides who acts for each turn: a replayed command
   log, the human (`IsPlayerTurn = true`, a launcher selected, the menu open) or the
   combatant's own brain (`BeginTurn()`).
 - `TurnController` also raises `TurnCommitted` (GameManager cancels a charge in
   progress and hides the menu), `TurnEnded` (the seat is done) and `MatchEnded`
   (GameManager shows the outcome labels).
 - `OnEventResolved()` runs when the pending-event list drains: it evaluates the
-  match and otherwise queues the *resume*, and `EndTurnNow()` queues the *advance*.
-  Both are **deferred to idle time** (`QueueResume()`, `QueueAdvance()`), because
-  an event can resolve from inside `_ExitTree` where the tree is locked (see
-  *Determinism*).
-- `EndRound()` is reached when every seat in the round order has had its turn: it
-  raises `RoundEnded` (the match pays income), increments `Round`, rebuilds the
-  round order **rotated left by one seat** and starts the next round's first turn.
+  match and otherwise ends the turn (`EndTurnNow()`), which queues the *advance*.
+  The advance is **deferred to idle time** (`QueueAdvance()`), because an event
+  can resolve from inside `_ExitTree` where the tree is locked (see *Determinism*).
+- `_roundOrder` is the queue that makes rounds work: the seats still owed a turn,
+  the acting one at the front. A seat that launched moves to the back; a seat that
+  skipped (or died) leaves it. `AdvanceTurn()` gives the turn to the front and
+  `EndRound()` is reached when the queue is empty: it raises `RoundEnded` (the
+  match pays income), increments `Round`, resets `TurnNumber`, rebuilds the round
+  order **rotated left by one seat** and starts the next round's first turn.
 - An AI combatant **must** either submit a build during its turn or submit a skip
   (`NodeChainCombatant.SubmitSkip()`), otherwise the rotation would wait forever.
-  `BeginTurn()` is called for the AI at the turn start and after every resolution.
+  `BeginTurn()` is called for the AI once per turn — a turn is one launch, so it
+  is not called again until the AI's next turn comes round.
 - Win/lose: `TurnController.EvaluateOutcome()` ends the match when a whole
   `Team` has no combatant left that can act — `VICTORY` if only the player's team
   is left, `DEFEAT` otherwise. Because destroying a root cascades down its cords
   through the whole chain, "the enemy's root was destroyed" is exactly this check.
-- `CurrentTurn` counts **rounds** (it advances at the end of a round), and the
-  turn label shows the round, whose move it is and that seat's energy.
+- `GameManager.CurrentTurn` is the **round** (it advances at the end of a round,
+  and it is what `Structure.DisableFor` counts in); `CurrentTurnNumber` is which
+  turn of that round is being played. The turn label shows both, whose move it is
+  and that seat's energy — `Round 2 · Turn 3 — your move — 6 energy`.
 - Game over: `_UnhandledInput` restarts the match on any key/click by
   reloading the scene (deferred by a frame, so the reload never runs from
   inside a node it is about to free).
@@ -317,10 +350,11 @@ Team/targeting details:
 ## Key mechanics & invariants
 
 - **Turn system**: the first event registered on the `TurnController` commits the
-  turn's resolution (`IsPlayerTurn=false`, `IsResolving=true`); control returns to
-  the same seat in `TurnResumed` when the pending-event list drains (M1). The turn
-  itself ends on a skip. `Structure.Destroy()` registers a `TurnEvent` resolved in
-  `_ExitTree` so destruction cascades finish before the seat acts again. The
+  turn's resolution (`IsPlayerTurn=false`, `IsResolving=true`); when the
+  pending-event list drains the turn is over and the seat moves to the back of the
+  round's order (M1: a turn is one launch). The turn also ends — forfeiting the
+  round — on a skip. `Structure.Destroy()` registers a `TurnEvent` resolved in
+  `_ExitTree` so destruction cascades finish before the turn is handed on. The
   cascade walks `ChildCords`: destroying a structure destroys everything its cords
   anchor, one generation per second.
 - **Energy and the build**: a unit's `Level` *is* its cost (docs/parity M1, §7).
@@ -351,8 +385,9 @@ Team/targeting details:
   1/3/7 pick a page, Q/E move the unit cursor, Enter or a click chooses a unit
   (`TryBuild` checks the launcher and the energy). *Launch*: the menu steps aside,
   A/D aim, holding `fire_shot` (W/Up) charges the power meter, release fires; Esc,
-  right-click or the Cancel button go back to the menu without spending. After a
-  shot resolves the player is back in the build view with the energy left.
+  right-click or the Cancel button go back to the menu without spending. A shot
+  ends the turn: the menu closes with it and reopens on the player's *next* turn,
+  with whatever energy was left.
 - **Aiming**: `aim_left`/`aim_right` rotate `_currentAimAngle` (A/D + arrow
   keys); `fire_shot` charges a power bar; release launches the chosen unit.
   The AI drives the same `_currentAimAngle`-equivalent through
@@ -420,13 +455,12 @@ possible, and it only holds if everything obeys four rules.
 
 Two consequences worth knowing before changing the turn flow:
 
-- **The rotation advances, and the same seat resumes, at idle time**
-  (`QueueAdvance()` / `QueueResume()`), never on the spot. Either can be triggered
-  from inside a node's `_ExitTree` — a destruction event resolves there — and the
-  tree is locked while nodes are removed, so anything the next turn spawns (a
-  replayed shot included) fails with "parent node is busy setting up children" and
-  leaves a turn that can never resolve. If you add work to a turn, do not un-defer
-  either call.
+- **The rotation advances at idle time** (`QueueAdvance()`), never on the spot.
+  A turn's end can be triggered from inside a node's `_ExitTree` — a destruction
+  event resolves there — and the tree is locked while nodes are removed, so
+  anything the next turn spawns (a replayed shot included) fails with "parent node
+  is busy setting up children" and leaves a turn that can never resolve. If you add
+  work to a turn, do not un-defer that call.
 - **What is not deterministic yet**: the AI's `ThinkTime`, the cascade's 1.0 s per
   generation and the human's turn clock are wall-clock timers. The first two pace
   the match rather than change its outcome (the world is frozen while a turn
@@ -516,10 +550,12 @@ godot --headless --fixed-fps 60 --path . Scenes/harness.tscn -- --turns=4 --seed
 
 The recorded match's state hash depends on the match's numbers and content, so
 an M1-era match is **not** expected to reproduce the M0 baseline
-(`c6cd89abf0971af6`, 10 rounds, seed 7): a turn is now several builds and the
-energy is part of the fingerprint. For reference, as of M1 the default 10-round,
-seed-7 match (the three shipped units) hashes to `2c6d2a00819b84b2`, and the
-Hub-and-Harvester run above to `14e62615617f13b9`; both replay to themselves.
+(`c6cd89abf0971af6`, 10 rounds, seed 7): the energy is part of the fingerprint and
+turn order is part of the state. For reference, as of M1 (a turn is one launch)
+the default 10-round, seed-7 match (the three shipped units) hashes to
+`2c6d2a00819b84b2`, and the Hub-and-Harvester run above to `c83c5a49e138bfd0`
+(replay it with the same `--tune` flags it was recorded with); both replay to
+themselves.
 
 `--fixed-fps 60` paces the run by frames rather than by the wall clock: it is much
 faster, and the think-timers stop depending on real time. The harness exits
@@ -603,8 +639,14 @@ Full documentation lives in **[docs/camera/README.md](docs/camera/README.md)** �
 read it before touching anything camera-related. In short:
 
 - Main camera: orthographic, tilted ~45°, looking down toward -Z.
-- `MatchCamera.CenterOn()` tweens to `target.XZ + _cameraOffset`; the tween is
-  killed whenever the player pans so pan never fights centering.
+- `MatchCamera.CenterOn()` tweens the camera to `target.XZ + _cameraOffset`,
+  where the offset is measured from the ground point the camera *centres*, not
+  from the camera body — a tilted orthographic camera hangs a screen's worth of Z
+  behind the spot at the middle of the screen, and measuring from the body put
+  every centred view about a screen to the right of its target. `_offset` is read
+  off the camera's own transform in `Build()`, and `Build()` then opens the match
+  framed on seat 0. The tween is killed whenever the player pans, so pan never
+  fights centering.
 - `MatchCamera.Pan()` (edge panning) requires window focus, the OS cursor inside
   the window, and no hovered Control.
 - Minimap: a runtime-built square `SubViewport` with a top-down camera, rendered
@@ -625,8 +667,9 @@ read it before touching anything camera-related. In short:
   clicking the page buttons does the same).
 - `choose_unit`: Enter — build the unit under the menu cursor (it opens the
   launch view). Clicking the unit's button does the same.
-- `end_turn`: Space — **skip**: end the turn and carry all unspent energy into
-  the next round (docs/parity M1). The menu also has an End turn button.
+- `end_turn`: Space — **skip**: forfeit the rest of the round, carrying all
+  unspent energy into the next one (docs/parity M1). The menu's button says
+  **Skip round** for the same reason.
 - `cancel_launch`: Esc — leave the launch view without firing; right-click does
   the same. Nothing is spent either way.
 - `dev_overlay`: F1 — opens the developer overlay (see *Tuning*). It is the only
